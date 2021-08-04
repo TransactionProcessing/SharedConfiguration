@@ -21,7 +21,7 @@ jobs:
     
     - name: Debug1
       run: |
-        cd /home/runner/work
+        cd /home/runner/work/SharedConfiguration/SharedConfiguration
         ls
     
     - name: Zip the config files
