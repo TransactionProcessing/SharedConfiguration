@@ -22,7 +22,7 @@ jobs:
     - name: Zip the config files
       uses: papeloto/action-zip@v1
       with:
-       files: /home/runner/work/SharedConfiguration/*.json
+       files: /home/runner/work/SharedConfiguration/SharedConfiguration/*.json
        dest: result.zip
        
     - name: Debug
