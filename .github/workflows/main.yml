@@ -68,7 +68,7 @@ jobs:
         --project "Shared Configuration"
         --version ${{ steps.get_version.outputs.VERSION }}
         --channel Default
-        --deployTo Development
+        --deployTo staging
         --waitfordeployment
         --deploymenttimeout 00:05:00
         --releasenotes "${{ steps.buildreleasenotes.outputs.releasenote }}"
