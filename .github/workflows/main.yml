@@ -44,3 +44,31 @@ jobs:
         --apiKey ${{ secrets.OCTOPUS_APIKEY }}
         --package /home/runner/work/SharedConfiguration/SharedConfiguration/deploy/SharedConfiguration.${{ steps.get_version.outputs.VERSION }}.zip
         --overwrite-mode IgnoreIfExists        
+
+    - name: Get Release
+      id: getrelease
+      uses: octokit/request-action@v2.0.17
+      with:
+          route: GET /repos/StuartFerguson/SharedConfiguration/releases/tags/${{ steps.get_version.outputs.VERSION }}
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+
+    - name: Build Release Notes
+      id: buildreleasenotes
+      uses: gr2m/get-json-paths-action@v1.0.4
+      with:
+          json: ${{ steps.getrelease.outputs.data }}
+          releasenote: "body"          
+
+    - name: Create & Deploy Release in Octopus
+      run: >-
+        octo create-release
+        --server ${{ secrets.OCTOPUS_URL }}
+        --apiKey ${{ secrets.OCTOPUS_APIKEY }}
+        --project "Shared Configuration"
+        --version ${{ steps.get_version.outputs.VERSION }}
+        --channel Default
+        --deployTo Development
+        --waitfordeployment
+        --deploymenttimeout 00:05:00
+        --releasenotes "${{ steps.buildreleasenotes.outputs.releasenote }}"
