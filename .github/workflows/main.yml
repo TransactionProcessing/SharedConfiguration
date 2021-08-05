@@ -49,7 +49,7 @@ jobs:
       id: getrelease
       uses: octokit/request-action@v2.0.17
       with:
-          route: GET /repos/StuartFerguson/SharedConfiguration/releases/tags/${{ steps.get_version.outputs.VERSION }}
+          route: GET /repos/TransactionProcessing/SharedConfiguration/releases/tags/${{ steps.get_version.outputs.VERSION }}
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
 
