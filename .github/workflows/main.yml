@@ -30,7 +30,7 @@ jobs:
       run: >-
         octo pack
         --outFolder /home/runner/work/SharedConfiguration/SharedConfiguration/deploy
-        --basePath /home/runner/work/SharedConfiguration/SharedConfiguration/
+        --basePath /home/runner/work/SharedConfiguration/SharedConfiguration/*.json
         --id SharedConfiguration
         --version ${{ steps.get_version.outputs.VERSION }}
         --format zip
@@ -42,5 +42,5 @@ jobs:
         octo push
         --server ${{ secrets.OCTOPUS_URL }}
         --apiKey ${{ secrets.OCTOPUS_APIKEY }}
-        --package /home/runner/work/SharedConfiguration/SharedConfiguration/SharedConfiguration.${{ steps.get_version.outputs.VERSION }}.zip
+        --package /home/runner/work/SharedConfiguration/SharedConfiguration/deploy/SharedConfiguration.${{ steps.get_version.outputs.VERSION }}.zip
         --overwrite-mode IgnoreIfExists        
