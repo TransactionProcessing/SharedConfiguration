@@ -41,7 +41,7 @@ jobs:
 
     - name: Get the version
       id: get_version
-      run: echo "version=GITHUB_REF/refs\/tags\// >> $GITHUB_ENV
+      run: echo "version=$GITHUB_REF/refs\/tags\//" >> $GITHUB_ENV
       
     - name: Build Docker Images 
       run: |
