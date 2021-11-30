@@ -41,17 +41,17 @@ jobs:
 
     - name: Get the version
       id: get_version
-      run: echo "version=$GITHUB_REF/refs\/tags\//" >> $GITHUB_ENV
+      uses: battila7/get-version-action@v2
       
     - name: Build Docker Images 
       run: |
-        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows:${{env.version}}
+        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows::${{ steps.get_version.outputs.version }}
 
     - name: Publish Images to Docker Hub
       run: |
         docker login --username=${{ secrets.DOCKER_USERNAME }} --password=${{ secrets.DOCKER_PASSWORD }}
         docker push stuartferguson/txnprocbasewindows:latest
-        docker push stuartferguson/txnprocbasewindows:${{env.version}}
+        docker push stuartferguson/txnprocbasewindows::${{ steps.get_version.outputs.version }}
   
   release:
     if: "!github.event.release.prerelease"
