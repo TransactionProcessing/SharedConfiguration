@@ -41,19 +41,17 @@ jobs:
 
     - name: Get the version
       id: get_version
-      run: |
-        set version=${GITHUB_REF/refs\/tags\//}
-        echo "::set-output name=VERSION::%version%"
+      run: echo "version=GITHUB_REF/refs\/tags\// >> $GITHUB_ENV
       
     - name: Build Docker Images 
       run: |
-        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.VERSION }}
+        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows:${{env.version}}
 
     - name: Publish Images to Docker Hub
       run: |
         docker login --username=${{ secrets.DOCKER_USERNAME }} --password=${{ secrets.DOCKER_PASSWORD }}
         docker push stuartferguson/txnprocbasewindows:latest
-        docker push stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.VERSION }}    
+        docker push stuartferguson/txnprocbasewindows:${{env.version}}
   
   release:
     if: "!github.event.release.prerelease"
