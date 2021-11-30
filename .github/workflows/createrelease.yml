@@ -21,13 +21,13 @@ jobs:
 
     - name: Build Docker Images 
       run: |
-        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.VERSION }}
+        docker build . --file Dockerfile --tag stuartferguson/txnprocbase:latest --tag stuartferguson/txnprocbase:${{ steps.get_version.outputs.VERSION }}
 
     - name: Publish Images to Docker Hub
       run: |
         docker login --username=${{ secrets.DOCKER_USERNAME }} --password=${{ secrets.DOCKER_PASSWORD }}
-        docker push stuartferguson/txnprocbasewindows:latest
-        docker push stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.VERSION }}
+        docker push stuartferguson/txnprocbase:latest
+        docker push stuartferguson/txnprocbase:${{ steps.get_version.outputs.VERSION }}
    
   buildwindows:
     name: "Build Windows Docker"
@@ -45,13 +45,13 @@ jobs:
 
     - name: Build Docker Images 
       run: |
-        docker build . --file Dockerfile --tag stuartferguson/txnprocbase:latest --tag stuartferguson/txnprocbase:${{ steps.get_version.outputs.VERSION }}
+        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.VERSION }}
 
     - name: Publish Images to Docker Hub
       run: |
         docker login --username=${{ secrets.DOCKER_USERNAME }} --password=${{ secrets.DOCKER_PASSWORD }}
-        docker push stuartferguson/txnprocbase:latest
-        docker push stuartferguson/txnprocbase:${{ steps.get_version.outputs.VERSION }}    
+        docker push stuartferguson/txnprocbasewindows:latest
+        docker push stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.VERSION }}    
   
   release:
     if: "!github.event.release.prerelease"
