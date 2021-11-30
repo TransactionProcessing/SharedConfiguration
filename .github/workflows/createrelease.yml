@@ -45,7 +45,7 @@ jobs:
       
     - name: Build Docker Images 
       run: |
-        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows::${{ steps.get_version.outputs.version }}
+        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.version }}
 
     - name: Publish Images to Docker Hub
       run: |
