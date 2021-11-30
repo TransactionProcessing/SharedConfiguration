@@ -41,8 +41,10 @@ jobs:
 
     - name: Get the version
       id: get_version
-      run: echo "::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}"
-
+      run: |
+        set version=%GITHUB_REF:*tags/=%
+        echo "::set-output name=VERSION::%version%"
+      
     - name: Build Docker Images 
       run: |
         docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.VERSION }}
