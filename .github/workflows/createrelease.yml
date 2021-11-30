@@ -42,7 +42,7 @@ jobs:
     - name: Get the version
       id: get_version
       run: |
-        set version=%GITHUB_REF:*tags/=%
+        set version=${GITHUB_REF/refs\/tags\//}
         echo "::set-output name=VERSION::%version%"
       
     - name: Build Docker Images 
