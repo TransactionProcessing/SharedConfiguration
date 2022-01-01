@@ -79,7 +79,7 @@ jobs:
       run: >-
         octo pack
         --outFolder /home/runner/work/SharedConfiguration/SharedConfiguration/deploy
-        --basePath /home/runner/work/SharedConfiguration/SharedConfiguration/config
+        --basePath /home/runner/work/SharedConfiguration/SharedConfiguration
         --id SharedConfiguration
         --version ${{ steps.get_version.outputs.VERSION }}
         --format zip
