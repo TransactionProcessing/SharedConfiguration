@@ -16,13 +16,9 @@ jobs:
     steps:
     - uses: actions/checkout@v2.3.4
 
-    - name: Get the version
-      id: get_version
-      run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
-
     - name: Build Docker Images 
       run: |
-        docker build . --file Dockerfile --tag stuartferguson/txnprocbase:latest --tag stuartferguson/txnprocbase:${{ steps.get_version.outputs.VERSION }}
+        docker build . --file Dockerfile --tag stuartferguson/txnprocbase:latest
     
   buildwindows:
     name: "Build Windows Docker"
@@ -40,4 +36,4 @@ jobs:
       
     - name: Build Docker Images 
       run: |
-        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.version }}              
+        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest
