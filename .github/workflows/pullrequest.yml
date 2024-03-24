@@ -1,0 +1,43 @@
+name: Build and Test Pull Requests
+
+on:
+  pull_request:
+    branches:
+    - master
+
+jobs:
+  buildlinux:
+    name: "Build Linux Docker"
+    env:
+        ASPNETCORE_ENVIRONMENT: "Production"
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2.3.4
+
+    - name: Get the version
+      id: get_version
+      run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
+
+    - name: Build Docker Images 
+      run: |
+        docker build . --file Dockerfile --tag stuartferguson/txnprocbase:latest --tag stuartferguson/txnprocbase:${{ steps.get_version.outputs.VERSION }}
+    
+  buildwindows:
+    name: "Build Windows Docker"
+    env:
+        ASPNETCORE_ENVIRONMENT: "Production"
+
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v2.3.4
+
+    - name: Get the version
+      id: get_version
+      uses: battila7/get-version-action@v2
+      
+    - name: Build Docker Images 
+      run: |
+        docker build . --file DockerfileWindows --tag stuartferguson/txnprocbasewindows:latest --tag stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.version }}              
