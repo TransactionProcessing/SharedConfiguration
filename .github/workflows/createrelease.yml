@@ -76,8 +76,13 @@ jobs:
      needs: buildconfigpackage
      environment: staging
      name: "Deploy to Staging"
-    
+
      steps:
+     - name: Download the artifact
+       uses: actions/download-artifact@v3
+       with:
+          name: sharedconfig
+          
      - name: deploy config
        run: |
           Expand-Archive -Path sharedconfig.zip -DestinationPath "C:\home\txnproc\config" -Force
@@ -90,6 +95,11 @@ jobs:
      name: "Deploy to Production"
     
      steps:
+     - name: Download the artifact
+       uses: actions/download-artifact@v3
+       with:
+          name: sharedconfig
+          
      - name: deploy config
        run: |
           Expand-Archive -Path sharedconfig.zip -DestinationPath "C:\home\txnproc\config" -Force
