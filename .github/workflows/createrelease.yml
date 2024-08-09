@@ -53,71 +53,41 @@ jobs:
         docker push stuartferguson/txnprocbasewindows:latest
         docker push stuartferguson/txnprocbasewindows:${{ steps.get_version.outputs.version }}
   
-  release:
-    if: "!github.event.release.prerelease"
-    name: "Release"
-    env:
-        ASPNETCORE_ENVIRONMENT: "Production"
-
+  buildconfigpackage:
     runs-on: ubuntu-latest
-
+    if: "!github.event.release.prerelease"
     steps:
-    - uses: actions/checkout@v2.3.4
-
-    - name: Get the version
-      id: get_version
-      run: echo ::set-output name=VERSION::${GITHUB_REF/refs\/tags\//}
-
-    - name: Install Octopus CLI
+    - name: Build Config Package
       run: |
-        sudo apt update && sudo apt install --no-install-recommends gnupg curl ca-certificates apt-transport-https && \
-        curl -sSfL https://apt.octopus.com/public.key | sudo apt-key add - && \
-        sudo sh -c "echo deb https://apt.octopus.com/ stable main > /etc/apt/sources.list.d/octopus.com.list" && \
-        sudo apt update && sudo apt install octopuscli      
+         cd ./config
+         zip -r ../../sharedconfig.zip ./*
 
-    - name: Pack Files for Octopus
-      run: >-
-        octo pack
-        --outFolder /home/runner/work/SharedConfiguration/SharedConfiguration/deploy
-        --basePath /home/runner/work/SharedConfiguration/SharedConfiguration
-        --id SharedConfiguration
-        --version ${{ steps.get_version.outputs.VERSION }}
-        --format zip
-        --verbose
-        --logLevel=verbose        
-
-    - name: Push Package to Octopus
-      run: >-
-        octo push
-        --server ${{ secrets.OCTOPUS_URL }}
-        --apiKey ${{ secrets.OCTOPUS_APIKEY }}
-        --package /home/runner/work/SharedConfiguration/SharedConfiguration/deploy/SharedConfiguration.${{ steps.get_version.outputs.VERSION }}.zip
-        --overwrite-mode IgnoreIfExists        
-
-    - name: Get Release
-      id: getrelease
-      uses: octokit/request-action@v2.0.17
+    - name: Upload the artifact
+      uses: actions/upload-artifact@v3
       with:
-          route: GET /repos/TransactionProcessing/SharedConfiguration/releases/tags/${{ steps.get_version.outputs.VERSION }}
-      env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  
+        name: sharedconfig
+        path: sharedconfig.zip
 
-    - name: Build Release Notes
-      id: buildreleasenotes
-      uses: gr2m/get-json-paths-action@v1.0.4
-      with:
-          json: ${{ steps.getrelease.outputs.data }}
-          releasenote: "body"          
+  deploystaging:
+     if: "!github.event.release.prerelease"
+     runs-on: stagingserver
+     needs: buildconfigpackage
+     environment: staging
+     name: "Deploy to Staging"
+    
+     steps:
+     - name: deploy config
+       run: |
+          Expand-Archive -Path sharedconfig.zip -DestinationPath "C:\home\txnproc\config" -Force
 
-    - name: Create & Deploy Release in Octopus
-      run: >-
-        octo create-release
-        --server ${{ secrets.OCTOPUS_URL }}
-        --apiKey ${{ secrets.OCTOPUS_APIKEY }}
-        --project "Shared Configuration"
-        --version ${{ steps.get_version.outputs.VERSION }}
-        --channel Default
-        --deployTo staging
-        --waitfordeployment
-        --deploymenttimeout 00:05:00
-        --releasenotes "${{ steps.buildreleasenotes.outputs.releasenote }}"
+  deployproduction:
+     if: "!github.event.release.prerelease"
+     runs-on: productionserver
+     needs: [buildconfigpackage, deploystaging]
+     environment: production
+     name: "Deploy to Production"
+    
+     steps:
+     - name: deploy config
+       run: |
+          Expand-Archive -Path sharedconfig.zip -DestinationPath "C:\home\txnproc\config" -Force
