@@ -62,7 +62,7 @@ jobs:
     - name: Build Config Package
       run: |
          cd ./config
-         zip -r ../../sharedconfig.zip ./*
+         zip -r ../sharedconfig.zip ./*
 
     - name: Upload the artifact
       uses: actions/upload-artifact@v3
