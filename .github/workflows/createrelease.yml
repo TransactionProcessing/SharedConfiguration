@@ -65,7 +65,7 @@ jobs:
          zip -r ../sharedconfig.zip ./*
 
     - name: Upload the artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4.6.2
       with:
         name: sharedconfig
         path: sharedconfig.zip
