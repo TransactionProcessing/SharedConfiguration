@@ -89,7 +89,7 @@ jobs:
 
   deployproduction:
      runs-on: [productionserver, linux]
-     needs: [parse-deploy-body, buildconfigpackage, deploystaging_linux]
+     needs: [buildconfigpackage, deploystaging]
      environment: production
      name: "Deploy to Production on Linux" 
     
