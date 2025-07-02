@@ -95,12 +95,11 @@ jobs:
           fi
 
   deploystaging_windows:
-     needs: parse-deploy-body
      if: needs.parse-deploy-body.outputs.deploy_linux == 'true'
      runs-on: [stagingserver, windows]
-     needs: buildconfigpackage
+     needs: [buildconfigpackage, parse-deploy-body]
      environment: staging
-     name: "Deploy to Staging"
+     name: "Deploy to Staging on Windows"
 
      steps:
      - name: Download the artifact
@@ -113,12 +112,11 @@ jobs:
           Expand-Archive -Path sharedconfig.zip -DestinationPath "C:\home\txnproc\config" -Force
 
   deploystaging_linux:
-     needs: parse-deploy-body
      if: needs.parse-deploy-body.outputs.deploy_linux == 'true'
      runs-on: [stagingserver, linux]
-     needs: buildconfigpackage
+     needs: [buildconfigpackage, parse-deploy-body]
      environment: staging
-     name: "Deploy to Staging"
+     name: "Deploy to Staging on Linux"
 
      steps:
      - name: Download the artifact
@@ -131,12 +129,11 @@ jobs:
            unzip sharedconfig.zip -d /home/txnproc/config
 
   deployproduction_windows:
-     needs: parse-deploy-body
      if: needs.parse-deploy-body.outputs.deploy_linux == 'true'     
      runs-on: [productionserver, windows]
-     needs: [buildconfigpackage, deploystaging_windows]
+     needs: [parse-deploy-body, buildconfigpackage, deploystaging_windows]
      environment: production
-     name: "Deploy to Production"
+     name: "Deploy to Production on Windows"
     
      steps:
      - name: Download the artifact
@@ -149,12 +146,11 @@ jobs:
           Expand-Archive -Path sharedconfig.zip -DestinationPath "C:\home\txnproc\config" -Force
 
   deployproduction_linux:
-     needs: parse-deploy-body
      if: needs.parse-deploy-body.outputs.deploy_linux == 'true'     
      runs-on: [productionserver, linux]
-     needs: [buildconfigpackage, deploystaging_linux]
+     needs: [parse-deploy-body, buildconfigpackage, deploystaging_linux]
      environment: production
-     name: "Deploy to Production"
+     name: "Deploy to Production on Linux" 
     
      steps:
      - name: Download the artifact
