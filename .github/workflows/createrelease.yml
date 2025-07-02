@@ -70,9 +70,34 @@ jobs:
         name: sharedconfig
         path: sharedconfig.zip
 
-  deploystaging:
-     if: "!github.event.release.prerelease"
-     runs-on: stagingserver
+  parse-deploy-body:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_linux: ${{ steps.set.outputs.deploy_linux }}
+      deploy_windows: ${{ steps.set.outputs.deploy_windows }}
+    steps:
+      - name: Parse deployment targets from release body
+        id: set
+        run: |
+          body="${{ github.event.release.body }}"
+          targets=$(echo "$body" | grep -i '^deploy:' | cut -d':' -f2 | tr -d ' ' | tr '[:upper:]' '[:lower:]')
+
+          if [[ "$targets" == *"linux"* ]]; then
+            echo "deploy_linux=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy_linux=false" >> $GITHUB_OUTPUT
+          fi
+
+          if [[ "$targets" == *"windows"* ]]; then
+            echo "deploy_windows=true" >> $GITHUB_OUTPUT
+          else
+            echo "deploy_windows=false" >> $GITHUB_OUTPUT
+          fi
+
+  deploystaging_windows:
+     needs: parse-deploy-body
+     if: needs.parse-deploy-body.outputs.deploy_linux == 'true'
+     runs-on: [stagingserver, windows]
      needs: buildconfigpackage
      environment: staging
      name: "Deploy to Staging"
@@ -87,10 +112,29 @@ jobs:
        run: |
           Expand-Archive -Path sharedconfig.zip -DestinationPath "C:\home\txnproc\config" -Force
 
-  deployproduction:
-     if: "!github.event.release.prerelease"
-     runs-on: productionserver
-     needs: [buildconfigpackage, deploystaging]
+  deploystaging_linux:
+     needs: parse-deploy-body
+     if: needs.parse-deploy-body.outputs.deploy_linux == 'true'
+     runs-on: [stagingserver, linux]
+     needs: buildconfigpackage
+     environment: staging
+     name: "Deploy to Staging"
+
+     steps:
+     - name: Download the artifact
+       uses: actions/download-artifact@v4.1.7
+       with:
+          name: sharedconfig
+          
+     - name: deploy config
+       run: |
+           unzip sharedconfig.zip -d /home/txnproc/config
+
+  deployproduction_windows:
+     needs: parse-deploy-body
+     if: needs.parse-deploy-body.outputs.deploy_linux == 'true'     
+     runs-on: [productionserver, windows]
+     needs: [buildconfigpackage, deploystaging_windows]
      environment: production
      name: "Deploy to Production"
     
@@ -103,3 +147,21 @@ jobs:
      - name: deploy config
        run: |
           Expand-Archive -Path sharedconfig.zip -DestinationPath "C:\home\txnproc\config" -Force
+
+  deployproduction_linux:
+     needs: parse-deploy-body
+     if: needs.parse-deploy-body.outputs.deploy_linux == 'true'     
+     runs-on: [productionserver, linux]
+     needs: [buildconfigpackage, deploystaging_linux]
+     environment: production
+     name: "Deploy to Production"
+    
+     steps:
+     - name: Download the artifact
+       uses: actions/download-artifact@v4.1.7
+       with:
+          name: sharedconfig
+          
+     - name: deploy config
+       run: |
+           unzip sharedconfig.zip -d /home/txnproc/config
