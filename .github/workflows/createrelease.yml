@@ -84,7 +84,7 @@ jobs:
           
      - name: deploy config
        run: |
-           mkdir -p /home/txnproc/config
+           sudo mkdir -p /home/txnproc/config
            sudo unzip sharedconfig.zip -d /home/txnproc/config
 
   deployproduction:
@@ -101,5 +101,5 @@ jobs:
           
      - name: deploy config
        run: |
-           mkdir -p /home/txnproc/config
+           sudo mkdir -p /home/txnproc/config
            sudo unzip sharedconfig.zip -d /home/txnproc/config
