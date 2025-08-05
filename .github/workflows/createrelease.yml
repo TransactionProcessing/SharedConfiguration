@@ -85,7 +85,7 @@ jobs:
      - name: deploy config
        run: |
            sudo mkdir -p /home/txnproc/config
-           sudo unzip sharedconfig.zip -d /home/txnproc/config
+           sudo unzip -o sharedconfig.zip -d /home/txnproc/config
 
   deployproduction:
      runs-on: [productionserver, linux]
@@ -102,4 +102,4 @@ jobs:
      - name: deploy config
        run: |
            sudo mkdir -p /home/txnproc/config
-           sudo unzip sharedconfig.zip -d /home/txnproc/config
+           sudo unzip -o sharedconfig.zip -d /home/txnproc/config
