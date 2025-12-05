@@ -71,10 +71,10 @@ jobs:
         path: sharedconfig.zip
 
   deploystaging:
-     runs-on: [stagingserver, linux]
+     runs-on: [stagingserver, windows]
      needs: [buildconfigpackage]
      environment: staging
-     name: "Deploy to Staging on Linux"
+     name: "Deploy to Staging on Windows"
 
      steps:
      - name: Download the artifact
@@ -82,16 +82,18 @@ jobs:
        with:
           name: sharedconfig
           
-     - name: deploy config
+     - name: Deploy config
+       shell: powershell
        run: |
-           sudo mkdir -p /home/txnproc/config
-           sudo unzip -o sharedconfig.zip -d /home/txnproc/config
+        $target = "C:\home\txnproc\config"
+        New-Item -ItemType Directory -Force -Path $target
+        Expand-Archive -Path sharedconfig.zip -DestinationPath $target -Force
 
   deployproduction:
-     runs-on: [productionserver, linux]
+     runs-on: [productionserver, windows]
      needs: [buildconfigpackage, deploystaging]
      environment: production
-     name: "Deploy to Production on Linux" 
+     name: "Deploy to Production on Windows" 
     
      steps:
      - name: Download the artifact
@@ -99,7 +101,9 @@ jobs:
        with:
           name: sharedconfig
           
-     - name: deploy config
+     - name: Deploy config
+       shell: powershell
        run: |
-           sudo mkdir -p /home/txnproc/config
-           sudo unzip -o sharedconfig.zip -d /home/txnproc/config
+        $target = "C:\home\txnproc\config"
+        New-Item -ItemType Directory -Force -Path $target
+        Expand-Archive -Path sharedconfig.zip -DestinationPath $target -Force
