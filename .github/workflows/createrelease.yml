@@ -83,12 +83,11 @@ jobs:
           name: sharedconfig
           
      - name: Deploy config
-       shell: powershell
+       shell: cmd
        run: |
-        Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-        $target = "C:\home\txnproc\config"
-        New-Item -ItemType Directory -Force -Path $target
-        Expand-Archive -Path sharedconfig.zip -DestinationPath $target -Force
+         set TARGET=C:\txnproc\config
+         if not exist "%TARGET%" mkdir "%TARGET%"
+         powershell -Command "Expand-Archive -Path 'sharedconfig.zip' -DestinationPath '%TARGET%' -Force"
 
   deployproduction:
      runs-on: [productionserver, windows]
@@ -103,9 +102,8 @@ jobs:
           name: sharedconfig
           
      - name: Deploy config
-       shell: powershell
+       shell: cmd
        run: |
-        Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
-        $target = "C:\home\txnproc\config"
-        New-Item -ItemType Directory -Force -Path $target
-        Expand-Archive -Path sharedconfig.zip -DestinationPath $target -Force
+         set TARGET=C:\txnproc\config
+         if not exist "%TARGET%" mkdir "%TARGET%"
+         powershell -Command "Expand-Archive -Path 'sharedconfig.zip' -DestinationPath '%TARGET%' -Force"
