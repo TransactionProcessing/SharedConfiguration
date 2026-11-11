@@ -1,0 +1,43 @@
+name: Deploy Development Configuration
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  buildconfigpackage:
+    name: Build Config Package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Package configuration files
+        run: cd config && zip -r ../sharedconfig.zip .
+
+      - name: Upload configuration package
+        uses: actions/upload-artifact@v4
+        with:
+          name: sharedconfig
+          path: sharedconfig.zip
+
+  deploydevelopment:
+    name: Deploy to Development on Windows
+    runs-on: [developmentserver, windows]
+    needs: [buildconfigpackage]
+    environment: development
+    permissions: {}
+    steps:
+      - name: Download configuration package
+        uses: actions/download-artifact@v4
+        with:
+          name: sharedconfig
+
+      - name: Deploy configuration
+        shell: cmd
+        run: |
+          set TARGET=C:\home\txnproc\config
+          if not exist "%TARGET%" mkdir "%TARGET%"
+          powershell -Command "Expand-Archive -Path 'sharedconfig.zip' -DestinationPath '%TARGET%' -Force"
