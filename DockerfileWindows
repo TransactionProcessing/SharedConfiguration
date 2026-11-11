@@ -1,5 +1,0 @@
-FROM mcr.microsoft.com/dotnet/aspnet:10.0-windowsservercore-ltsc2022 AS base
-
-WORKDIR /home/txnproc/
-COPY ["/config", "config"]
-COPY ["/syncfusion/QtBinariesWindows", "syncfusion/QtBinariesWindows"]

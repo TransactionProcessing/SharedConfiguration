@@ -28,7 +28,7 @@ To build the Linux runtime image from the repository root:
 docker build --file Dockerfile --tag txnprocbase:local .
 ```
 
-The image uses the ASP.NET runtime base image declared in `Dockerfile` and places the shared files under `/home/txnproc/`. The consuming application image or runtime is responsible for starting the application.
+The image uses `mcr.microsoft.com/dotnet/aspnet:11.0` as its base and places the shared files under `/home/txnproc/`. The consuming application image or runtime is responsible for starting the application.
 
 ## Release and deployment
 
