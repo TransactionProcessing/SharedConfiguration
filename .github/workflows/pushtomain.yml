@@ -38,6 +38,6 @@ jobs:
       - name: Deploy configuration
         shell: cmd
         run: |
-          set TARGET=C:\\home\\txnproc\\config
+          set TARGET=C:\home\txnproc\config
           if not exist "%TARGET%" mkdir "%TARGET%"
           powershell -Command "Expand-Archive -Path 'sharedconfig.zip' -DestinationPath '%TARGET%' -Force"
