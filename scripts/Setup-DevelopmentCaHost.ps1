@@ -60,12 +60,21 @@ function Set-FileReadAcl {
 }
 
 function Get-UsbDriveRoot {
+    param(
+        [string] $ExcludeRoot,
+        [string] $Prompt = 'Enter the USB drive letter (for example E:)'
+    )
+
     $drives = @(Get-CimInstance Win32_LogicalDisk | Where-Object { $_.DeviceID })
+    if ($ExcludeRoot) {
+        $excludedDevice = $ExcludeRoot.TrimEnd('\')
+        $drives = @($drives | Where-Object { $_.DeviceID -ine $excludedDevice })
+    }
     if ($drives.Count -eq 0) { throw 'No mounted drive volumes were found.' }
 
     Write-Host 'Mounted drive volumes:'
     $drives | ForEach-Object { Write-Host "  $($_.DeviceID)  $($_.VolumeName)  (drive type $($_.DriveType))" }
-    $letter = Read-Host 'Enter the USB drive letter (for example E:)'
+    $letter = Read-Host $Prompt
     if ($letter -notmatch '^[A-Za-z]:?$') { throw 'Enter a drive letter such as E or E:.' }
     $root = "{0}:\" -f $letter.TrimEnd(':')
     if (-not ($drives.DeviceID -contains $root.TrimEnd('\'))) {
@@ -76,6 +85,12 @@ function Get-UsbDriveRoot {
         throw 'USB drive confirmation did not match.'
     }
     return $root
+}
+
+function Set-AdminOnlyFileAcl {
+    param([Parameter(Mandatory)][string] $Path)
+    & icacls.exe $Path /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not restrict temporary secret file permissions on $Path." }
 }
 
 function Convert-SecureStringToPlainText {
@@ -282,27 +297,33 @@ if ($alreadyInitialized) {
     $usbRootKeyPath = $null
 }
 else {
-    $usbRoot = Get-UsbDriveRoot
+    $usbRoot = Get-UsbDriveRoot -Prompt 'Enter the USB drive letter for the offline root key'
+    $usbBackupRoot = Get-UsbDriveRoot -ExcludeRoot $usbRoot -Prompt 'Enter a DIFFERENT USB drive letter for the offline root backup'
     $usbRootDirectory = Join-Path $usbRoot 'Smallstep\DevelopmentRoot'
-    $usbStepPath = $usbRootDirectory
+    $usbBackupDirectory = Join-Path $usbBackupRoot 'Smallstep\DevelopmentRootBackup'
     if (Test-Path -LiteralPath $usbRootDirectory) {
         throw "$usbRootDirectory already exists. Choose an empty USB location; existing key material will not be overwritten."
     }
-    New-Item -ItemType Directory -Path (Join-Path $usbStepPath 'certs'), (Join-Path $usbStepPath 'secrets'), `
-        (Join-Path $usbStepPath 'config') -Force | Out-Null
-    $usbRootKeyPath = Join-Path $usbStepPath 'secrets\root_ca_key'
-    $usbRootCertificatePath = Join-Path $usbStepPath 'certs\root_ca.crt'
+    if (Test-Path -LiteralPath $usbBackupDirectory) {
+        throw "$usbBackupDirectory already exists. Choose an empty location for the verified root backup; existing files will not be overwritten."
+    }
+    New-Item -ItemType Directory -Path (Join-Path $usbRootDirectory 'certs'), (Join-Path $usbRootDirectory 'secrets') -Force | Out-Null
+    $usbRootKeyPath = Join-Path $usbRootDirectory 'secrets\root_ca_key'
+    $usbRootCertificatePath = Join-Path $usbRootDirectory 'certs\root_ca.crt'
 
     $rootPassword = Read-ConfirmedPassword -Prompt 'Set the offline root CA key passphrase (record it safely; the passphrase file will be temporary)'
     $caPassword = Read-ConfirmedPassword -Prompt 'Set the online intermediate CA key passphrase'
     $provisionerPassword = Read-ConfirmedPassword -Prompt 'Set the development provisioner key passphrase (record it safely; its passphrase file will be temporary)'
     $rootPasswordFile = Join-Path $env:TEMP ("step-root-pass-{0}.txt" -f [guid]::NewGuid())
     $provisionerPasswordFile = Join-Path $env:TEMP ("step-provisioner-pass-{0}.txt" -f [guid]::NewGuid())
+    $testProvisionerPasswordFile = Join-Path $env:TEMP ("step-test-provisioner-pass-{0}.txt" -f [guid]::NewGuid())
 
     try {
         Write-PasswordFile -Path $rootPasswordFile -Password $rootPassword
         Write-PasswordFile -Path $passwordFilePath -Password $caPassword
         Write-PasswordFile -Path $provisionerPasswordFile -Password $provisionerPassword
+        Set-AdminOnlyFileAcl -Path $rootPasswordFile
+        Set-AdminOnlyFileAcl -Path $provisionerPasswordFile
         $rootPassword = $null
         $caPassword = $null
         $provisionerPassword = $null
@@ -310,7 +331,11 @@ else {
             '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not restrict permissions on the CA passphrase file.' }
 
-        New-Item -ItemType Directory -Path $usbStepPath -Force | Out-Null
+        Write-Warning 'Disconnect this host from all networks before generating or using the offline root key. Package installation and downloads are already complete.'
+        if ((Read-Host 'After disconnecting network access, type OFFLINE to continue with the offline root ceremony') -cne 'OFFLINE') {
+            throw 'Network isolation was not confirmed. Root key generation was not started.'
+        }
+
         $rootArgs = @(
             'certificate', 'create',
             'Transaction Processing Development Root CA',
@@ -321,9 +346,43 @@ else {
         & $stepExe @rootArgs
         if ($LASTEXITCODE -ne 0) { throw "Root CA creation failed with exit code $LASTEXITCODE." }
 
+        $rootFingerprint = (& $stepExe certificate fingerprint $usbRootCertificatePath 2>&1 | Out-String).Trim()
+        if ($LASTEXITCODE -ne 0 -or $rootFingerprint -notmatch '^[0-9a-fA-F]{64}$') {
+            throw "Could not calculate the SHA-256 fingerprint for the root certificate. Output: $rootFingerprint"
+        }
+        Write-Host ''
+        Write-Host "Root certificate SHA-256 fingerprint: $rootFingerprint" -ForegroundColor Yellow
+        if ((Read-Host 'Record this fingerprint somewhere separate from both USB drives, then type RECORDED') -cne 'RECORDED') {
+            throw 'The root fingerprint was not confirmed as recorded out of band.'
+        }
+
+        $usbBackupKeyPath = Join-Path $usbBackupDirectory 'secrets\root_ca_key'
+        $usbBackupCertificatePath = Join-Path $usbBackupDirectory 'certs\root_ca.crt'
+        New-Item -ItemType Directory -Path (Split-Path -Parent $usbBackupKeyPath), (Split-Path -Parent $usbBackupCertificatePath) -Force | Out-Null
+        Copy-Item -LiteralPath $usbRootKeyPath -Destination $usbBackupKeyPath
+        Copy-Item -LiteralPath $usbRootCertificatePath -Destination $usbBackupCertificatePath
+        $sourceKeyHash = (Get-FileHash -LiteralPath $usbRootKeyPath -Algorithm SHA256).Hash
+        $backupKeyHash = (Get-FileHash -LiteralPath $usbBackupKeyPath -Algorithm SHA256).Hash
+        $sourceCertificateHash = (Get-FileHash -LiteralPath $usbRootCertificatePath -Algorithm SHA256).Hash
+        $backupCertificateHash = (Get-FileHash -LiteralPath $usbBackupCertificatePath -Algorithm SHA256).Hash
+        $backupFingerprint = (& $stepExe certificate fingerprint $usbBackupCertificatePath 2>&1 | Out-String).Trim()
+        if ($sourceKeyHash -ne $backupKeyHash -or $sourceCertificateHash -ne $backupCertificateHash -or
+            $backupFingerprint -ne $rootFingerprint) {
+            throw 'The root-key backup did not match its source. Do not eject or use either drive; investigate the copy failure.'
+        }
+        $backupManifestPath = Join-Path $usbBackupDirectory 'backup-manifest.txt'
+        [IO.File]::WriteAllLines($backupManifestPath, @(
+            "Root certificate fingerprint: $rootFingerprint"
+            "Root key SHA-256: $sourceKeyHash"
+            "Root certificate SHA-256: $sourceCertificateHash"
+            "Backup verified UTC: $([DateTime]::UtcNow.ToString('o'))"
+        ), [Text.UTF8Encoding]::new($false))
+        Write-Host "Verified root backup: $usbBackupDirectory"
+
         $previousStepPath = $env:STEPPATH
         try {
-            $env:STEPPATH = $usbStepPath
+            # Keep the root key on removable media; step ca init writes the intermediate key to host storage.
+            $env:STEPPATH = $DataRoot
             $initArgs = @(
                 'ca', 'init',
                 '--root', $usbRootCertificatePath,
@@ -351,28 +410,22 @@ else {
         Remove-Item -LiteralPath $rootPasswordFile, $provisionerPasswordFile -Force -ErrorAction SilentlyContinue
     }
 
-    $usbRootKeyPath = Join-Path $usbStepPath 'secrets\root_ca_key'
-    $usbRootCertificatePath = Join-Path $usbStepPath 'certs\root_ca.crt'
-    $usbIntermediateCertificatePath = Join-Path $usbStepPath 'certs\intermediate_ca.crt'
-    $usbIntermediateKeyPath = Join-Path $usbStepPath 'secrets\intermediate_ca_key'
-    $usbConfigPath = Join-Path $usbStepPath 'config\ca.json'
-    foreach ($requiredFile in @($usbRootKeyPath, $usbRootCertificatePath, $usbIntermediateCertificatePath, $usbIntermediateKeyPath, $usbConfigPath, $passwordFilePath)) {
+    $usbBackupKeyPath = Join-Path $usbBackupDirectory 'secrets\root_ca_key'
+    foreach ($requiredFile in @($usbRootKeyPath, $usbRootCertificatePath, $usbBackupKeyPath, $rootCertificatePath, $intermediateCertificatePath, $intermediateKeyPath, $caConfigPath, $passwordFilePath)) {
         if (-not (Test-Path -LiteralPath $requiredFile)) { throw "Expected CA initialization output is missing: $requiredFile" }
     }
 
-    Copy-DirectoryContents -Source (Join-Path $usbStepPath 'certs') -Destination (Join-Path $DataRoot 'certs')
-    Copy-DirectoryContents -Source (Join-Path $usbStepPath 'config') -Destination (Join-Path $DataRoot 'config')
-    Get-ChildItem -LiteralPath (Join-Path $usbStepPath 'secrets') -File -Force |
-        Where-Object { $_.Name -ne 'root_ca_key' } |
-        Copy-Item -Destination (Join-Path $DataRoot 'secrets') -Force
-    if (Test-Path -LiteralPath (Join-Path $usbStepPath 'db')) {
-        New-Item -ItemType Directory -Path (Join-Path $DataRoot 'db') -Force | Out-Null
-        Copy-DirectoryContents -Source (Join-Path $usbStepPath 'db') -Destination (Join-Path $DataRoot 'db')
+    if (Test-Path -LiteralPath $rootCertificatePath) {
+        $hostCertificateHash = (Get-FileHash -LiteralPath $rootCertificatePath -Algorithm SHA256).Hash
+        if ($hostCertificateHash -ne $sourceCertificateHash) {
+            throw 'step ca init wrote a root certificate that does not match the recorded offline root. Refusing to continue.'
+        }
     }
-    if (Test-Path -LiteralPath (Join-Path $usbStepPath 'valuedb')) {
-        New-Item -ItemType Directory -Path (Join-Path $DataRoot 'valuedb') -Force | Out-Null
-        Copy-DirectoryContents -Source (Join-Path $usbStepPath 'valuedb') -Destination (Join-Path $DataRoot 'valuedb')
+    else {
+        Copy-Item -LiteralPath $usbRootCertificatePath -Destination $rootCertificatePath
     }
+    $hostRootKeys = @(Get-ChildItem -LiteralPath $DataRoot -Filter 'root_ca_key' -File -Recurse -ErrorAction SilentlyContinue)
+    if ($hostRootKeys.Count -gt 0) { throw "The offline root private key was found on the online host under ${DataRoot}: $($hostRootKeys.FullName -join ', '). Remove it before proceeding." }
 
     $caConfig = Get-Content -LiteralPath $caConfigPath -Raw | ConvertFrom-Json
     $caConfig.root = $rootCertificatePath
@@ -394,11 +447,6 @@ else {
         $defaults.'ca-url' = "https://${CaDnsName}:$Port"
         Write-JsonFile -Path $defaultsPath -Value $defaults
     }
-
-    # The USB is the offline root-key store; remove online signing-key copies from it.
-    Get-ChildItem -LiteralPath (Join-Path $usbStepPath 'secrets') -File -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -ne $usbRootKeyPath } |
-        Remove-Item -Force
 
     & icacls.exe $passwordFilePath /inheritance:r /grant:r `
         '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
@@ -433,10 +481,10 @@ Set-Content -LiteralPath $serviceXmlPath -Value $xml -Encoding utf8
 
 Write-Host ''
 if ($usbRootKeyPath) {
-    Write-Host 'Remove/eject the USB drive now. It contains the offline root private key.'
-    [void](Read-Host 'After ejecting the USB drive, press Enter to install and start the CA service')
-    if (Test-Path -LiteralPath $usbRootKeyPath) {
-        throw 'The USB drive is still mounted. Eject it before the CA service starts.'
+    Write-Host 'Remove/eject both USB drives now. One contains the offline root; the other contains its verified backup.'
+    [void](Read-Host 'After ejecting both USB drives, press Enter to install and start the CA service')
+    if ((Test-Path -LiteralPath $usbRootKeyPath) -or (Test-Path -LiteralPath $usbBackupKeyPath)) {
+        throw 'At least one root-key USB drive is still mounted. Eject both before the CA service starts.'
     }
 }
 
@@ -461,9 +509,49 @@ if ($service.Status -ne 'Running') { throw "CA service did not reach Running sta
 & $stepExe ca health --ca-url "https://localhost:$Port" --root $rootCertificatePath
 if ($LASTEXITCODE -ne 0) { throw "step ca health failed. Check the WinSW logs under $logsPath." }
 
+$testProvisionerPassword = Read-Host 'Re-enter the dev-admin provisioner passphrase to issue a temporary test certificate' -AsSecureString
+$testProvisionerPasswordText = Convert-SecureStringToPlainText -Value $testProvisionerPassword
+$testProvisionerPassword = $null
+Write-PasswordFile -Path $testProvisionerPasswordFile -Password $testProvisionerPasswordText
+$testProvisionerPasswordText = $null
+Set-AdminOnlyFileAcl -Path $testProvisionerPasswordFile
+$testCertificatePath = Join-Path $env:TEMP ("step-ca-test-{0}.crt" -f [guid]::NewGuid())
+$testKeyPath = Join-Path $env:TEMP ("step-ca-test-{0}.key" -f [guid]::NewGuid())
+$testBundlePath = Join-Path $env:TEMP ("step-ca-test-{0}-chain.crt" -f [guid]::NewGuid())
+try {
+    $issueArgs = @(
+        'ca', 'certificate', 'https-setup-check', $testCertificatePath, $testKeyPath,
+        '--provisioner', 'dev-admin',
+        '--provisioner-password-file', $testProvisionerPasswordFile,
+        '--password-file', $passwordFilePath,
+        '--ca-url', "https://localhost:$Port",
+        '--root', $rootCertificatePath,
+        '--san', 'localhost',
+        '--not-after=5m'
+    )
+    & $stepExe @issueArgs
+    if ($LASTEXITCODE -ne 0) { throw "The test leaf certificate request failed with exit code $LASTEXITCODE." }
+    Set-AdminOnlyFileAcl -Path $testCertificatePath
+    Set-AdminOnlyFileAcl -Path $testKeyPath
+    $bundle = [IO.File]::ReadAllText($testCertificatePath) + [Environment]::NewLine + [IO.File]::ReadAllText($intermediateCertificatePath)
+    [IO.File]::WriteAllText($testBundlePath, $bundle, [Text.UTF8Encoding]::new($false))
+    Set-AdminOnlyFileAcl -Path $testBundlePath
+    & $stepExe certificate verify $testBundlePath --roots $rootCertificatePath --host 'localhost'
+    if ($LASTEXITCODE -ne 0) { throw 'The test leaf certificate did not validate to the offline root.' }
+    Write-Host 'Test leaf certificate issued and verified to the offline root.'
+}
+finally {
+    Remove-Item -LiteralPath $testProvisionerPasswordFile, $testCertificatePath, $testKeyPath, $testBundlePath -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host ''
 Write-Host "Development CA is running at https://${CaDnsName}:$Port"
 Write-Host "Root certificate: $rootCertificatePath"
-if ($usbRootKeyPath) { Write-Host "Root private key (keep offline): $usbRootKeyPath" }
+if ($usbRootKeyPath) {
+    Write-Host "Offline root-key USB location (keep unplugged): $usbRootKeyPath"
+    Write-Host "Verified root backup location (keep unplugged): $usbBackupKeyPath"
+    Write-Host "Recorded root SHA-256 fingerprint: $rootFingerprint"
+    Write-Host 'Reconnect network access now if required for development clients.'
+}
 Write-Host 'No Windows Firewall rules were created or changed.'
 
