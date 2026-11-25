@@ -331,9 +331,13 @@ else {
             '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not restrict permissions on the CA passphrase file.' }
 
-        Write-Warning 'Disconnect this host from all networks before generating or using the offline root key. Package installation and downloads are already complete.'
-        if ((Read-Host 'After disconnecting network access, type OFFLINE to continue with the offline root ceremony') -cne 'OFFLINE') {
-            throw 'Network isolation was not confirmed. Root key generation was not started.'
+        Write-Host 'For stronger protection, disconnect this host from all networks during the root ceremony.'
+        $rootNetworkMode = (Read-Host 'Type OFFLINE after disconnecting, or CONNECTED to continue without disconnecting').Trim().ToUpperInvariant()
+        if ($rootNetworkMode -notin @('OFFLINE', 'CONNECTED')) {
+            throw 'Enter OFFLINE or CONNECTED to choose how to perform the root ceremony.'
+        }
+        if ($rootNetworkMode -eq 'CONNECTED') {
+            Write-Warning 'Proceeding while connected increases the exposure of the root key while it is in use on this host.'
         }
 
         $rootArgs = @(
@@ -375,6 +379,7 @@ else {
             "Root certificate fingerprint: $rootFingerprint"
             "Root key SHA-256: $sourceKeyHash"
             "Root certificate SHA-256: $sourceCertificateHash"
+            "Network mode during root ceremony: $rootNetworkMode"
             "Backup verified UTC: $([DateTime]::UtcNow.ToString('o'))"
         ), [Text.UTF8Encoding]::new($false))
         Write-Host "Verified root backup: $usbBackupDirectory"
