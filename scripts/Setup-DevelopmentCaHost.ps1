@@ -423,7 +423,8 @@ $xml = @"
   <onfailure action="restart" delay="10 sec" />
   <onfailure action="restart" delay="30 sec" />
   <serviceaccount>
-    <username>$serviceAccount</username>
+    <domain>NT SERVICE</domain>
+    <user>$serviceName</user>
     <allowservicelogon>true</allowservicelogon>
   </serviceaccount>
 </service>
