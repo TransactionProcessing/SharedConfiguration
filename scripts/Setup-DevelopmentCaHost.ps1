@@ -6,7 +6,7 @@ param(
 
     [Parameter()]
     [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string] $WinSwVersion = '2.14.1',
+    [string] $WinSwVersion = '2.14.0',
 
     [Parameter()]
     [string] $CaDnsName,
@@ -96,6 +96,15 @@ function Write-PasswordFile {
         [Parameter(Mandatory)][string] $Password
     )
     [IO.File]::WriteAllText($Path, $Password, [Text.UTF8Encoding]::new($false))
+}
+
+function Write-JsonFile {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][object] $Value
+    )
+    $json = $Value | ConvertTo-Json -Depth 100
+    [IO.File]::WriteAllText($Path, $json, [Text.UTF8Encoding]::new($false))
 }
 
 function Copy-DirectoryContents {
@@ -351,13 +360,13 @@ else {
             $caConfig.db.valueDir = Join-Path $DataRoot 'valuedb'
         }
     }
-    $caConfig | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $caConfigPath -Encoding utf8
+    Write-JsonFile -Path $caConfigPath -Value $caConfig
     $defaultsPath = Join-Path $DataRoot 'config\defaults.json'
     if (Test-Path -LiteralPath $defaultsPath) {
         $defaults = Get-Content -LiteralPath $defaultsPath -Raw | ConvertFrom-Json
         $defaults.root = $rootCertificatePath
         $defaults.'ca-url' = "https://${CaDnsName}:$Port"
-        $defaults | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $defaultsPath -Encoding utf8
+        Write-JsonFile -Path $defaultsPath -Value $defaults
     }
 
     # The USB is the offline root-key store; remove online signing-key copies from it.
@@ -372,7 +381,7 @@ else {
 
 $caConfig = Get-Content -LiteralPath $caConfigPath -Raw | ConvertFrom-Json
 $caConfig.address = ":$Port"
-$caConfig | ConvertTo-Json -Depth 100 | Set-Content -LiteralPath $caConfigPath -Encoding utf8
+Write-JsonFile -Path $caConfigPath -Value $caConfig
 Set-DirectoryAcl -Path $DataRoot
 Get-ChildItem -LiteralPath $DataRoot -Directory -Recurse | ForEach-Object {
     $isWritableState = $_.FullName -match '\\(db|valuedb|logs)(\\|$)'
