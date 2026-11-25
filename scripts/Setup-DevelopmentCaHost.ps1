@@ -33,14 +33,29 @@ function Assert-Administrator {
 function Set-DirectoryAcl {
     param(
         [Parameter(Mandatory)][string] $Path,
+        [string] $ServiceAccount,
         [switch] $ServiceModify
     )
 
-    $servicePermission = if ($ServiceModify) { '*S-1-5-19:(OI)(CI)M' } else { '*S-1-5-19:(OI)(CI)RX' }
+    $permissions = @(
+        '*S-1-5-18:(OI)(CI)F'
+        '*S-1-5-32-544:(OI)(CI)F'
+    )
+    if ($ServiceAccount) {
+        $serviceRights = if ($ServiceModify) { 'M' } else { 'RX' }
+        $permissions += "${ServiceAccount}:(OI)(CI)$serviceRights"
+    }
+    & icacls.exe $Path /inheritance:r /grant:r @permissions | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "Could not set permissions on $Path (icacls exit $LASTEXITCODE)." }
+}
+
+function Set-FileReadAcl {
+    param(
+        [Parameter(Mandatory)][string] $Path,
+        [Parameter(Mandatory)][string] $ServiceAccount
+    )
     & icacls.exe $Path /inheritance:r /grant:r `
-        $servicePermission `
-        '*S-1-5-18:(OI)(CI)F' `
-        '*S-1-5-32-544:(OI)(CI)F' | Out-Null
+        "${ServiceAccount}:R" '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "Could not set permissions on $Path (icacls exit $LASTEXITCODE)." }
 }
 
@@ -170,6 +185,7 @@ $intermediateKeyPath = Join-Path $DataRoot 'secrets\intermediate_ca_key'
 $passwordFilePath = Join-Path $DataRoot 'secrets\ca-password'
 $logsPath = Join-Path $DataRoot 'logs'
 $serviceName = 'StepCaDevelopment'
+$serviceAccount = "NT SERVICE\$serviceName"
 $serviceXmlPath = Join-Path $serviceDirectory 'StepCaDevelopment.xml'
 $winswPath = Join-Path $serviceDirectory 'StepCaDevelopment.exe'
 $stepExe = Join-Path $toolDirectory 'step.exe'
@@ -181,9 +197,19 @@ if ($existingService) {
     if (-not $serviceDetails -or $serviceDetails.PathName.IndexOf($winswPath, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
         throw "Service '$serviceName' exists but does not point to this setup's WinSW wrapper. No existing service was changed."
     }
+    if ($serviceDetails.StartName -ine $serviceAccount) {
+        throw "Existing service '$serviceName' runs as '$($serviceDetails.StartName)', not '$serviceAccount'. Stop and migrate it before rerunning; this script will not silently change the identity of a running CA."
+    }
     foreach ($requiredFile in @($stepExe, $stepCaExe, $rootCertificatePath, $intermediateCertificatePath, $intermediateKeyPath, $passwordFilePath, $caConfigPath, $winswPath)) {
         if (-not (Test-Path -LiteralPath $requiredFile)) { throw "Existing CA setup is incomplete: $requiredFile" }
     }
+    Set-DirectoryAcl -Path $DataRoot -ServiceAccount $serviceAccount
+    Get-ChildItem -LiteralPath $DataRoot -Directory -Recurse | ForEach-Object {
+        $isWritableState = $_.FullName -match '\\(db|valuedb|logs)(\\|$)'
+        if ($isWritableState) { Set-DirectoryAcl -Path $_.FullName -ServiceAccount $serviceAccount -ServiceModify }
+        else { Set-DirectoryAcl -Path $_.FullName -ServiceAccount $serviceAccount }
+    }
+    Set-FileReadAcl -Path $passwordFilePath -ServiceAccount $serviceAccount
 
     $existingVersion = (& $stepCaExe version 2>&1 | Out-String)
     if ($LASTEXITCODE -ne 0 -or $existingVersion -notmatch [regex]::Escape($StepCaVersion)) {
@@ -220,7 +246,7 @@ Set-DirectoryAcl -Path $DataRoot
 Set-DirectoryAcl -Path (Join-Path $DataRoot 'certs')
 Set-DirectoryAcl -Path (Join-Path $DataRoot 'config')
 Set-DirectoryAcl -Path (Join-Path $DataRoot 'secrets')
-Set-DirectoryAcl -Path $logsPath -ServiceModify
+Set-DirectoryAcl -Path $logsPath
 
 $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
 if (-not $winget) { throw 'WinGet is required for checksum-verified Smallstep installation. Install App Installer and rerun.' }
@@ -281,7 +307,7 @@ else {
         $caPassword = $null
         $provisionerPassword = $null
         & icacls.exe $passwordFilePath /inheritance:r /grant:r `
-            '*S-1-5-19:R' '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+            '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not restrict permissions on the CA passphrase file.' }
 
         New-Item -ItemType Directory -Path $usbStepPath -Force | Out-Null
@@ -375,19 +401,13 @@ else {
         Remove-Item -Force
 
     & icacls.exe $passwordFilePath /inheritance:r /grant:r `
-        '*S-1-5-19:R' '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
+        '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not restrict permissions on the CA passphrase file.' }
 }
 
 $caConfig = Get-Content -LiteralPath $caConfigPath -Raw | ConvertFrom-Json
 $caConfig.address = ":$Port"
 Write-JsonFile -Path $caConfigPath -Value $caConfig
-Set-DirectoryAcl -Path $DataRoot
-Get-ChildItem -LiteralPath $DataRoot -Directory -Recurse | ForEach-Object {
-    $isWritableState = $_.FullName -match '\\(db|valuedb|logs)(\\|$)'
-    if ($isWritableState) { Set-DirectoryAcl -Path $_.FullName -ServiceModify }
-    else { Set-DirectoryAcl -Path $_.FullName }
-}
 
 $xml = @"
 <service>
@@ -403,7 +423,8 @@ $xml = @"
   <onfailure action="restart" delay="10 sec" />
   <onfailure action="restart" delay="30 sec" />
   <serviceaccount>
-    <username>NT AUTHORITY\LocalService</username>
+    <username>$serviceAccount</username>
+    <allowservicelogon>true</allowservicelogon>
   </serviceaccount>
 </service>
 "@
@@ -420,6 +441,15 @@ if ($usbRootKeyPath) {
 
 & $winswPath install
 if ($LASTEXITCODE -ne 0) { throw "WinSW service installation failed with exit code $LASTEXITCODE." }
+# Install creates the virtual service account so Windows can resolve it in filesystem ACLs.
+# Reapply ACLs after installation to ensure the CA can read its keys and write only state/log paths.
+Set-DirectoryAcl -Path $DataRoot -ServiceAccount $serviceAccount
+Get-ChildItem -LiteralPath $DataRoot -Directory -Recurse | ForEach-Object {
+    $isWritableState = $_.FullName -match '\\(db|valuedb|logs)(\\|$)'
+    if ($isWritableState) { Set-DirectoryAcl -Path $_.FullName -ServiceAccount $serviceAccount -ServiceModify }
+    else { Set-DirectoryAcl -Path $_.FullName -ServiceAccount $serviceAccount }
+}
+Set-FileReadAcl -Path $passwordFilePath -ServiceAccount $serviceAccount
 & $winswPath start
 if ($LASTEXITCODE -ne 0) { throw "WinSW service start failed with exit code $LASTEXITCODE." }
 
