@@ -12,6 +12,20 @@ param(
     [string] $CaDnsName,
 
     [Parameter()]
+    [string[]] $AllowedDnsNames = @(),
+
+    [Parameter()]
+    [string[]] $AllowedIpAddresses = @('192.168.1.86', '192.168.1.163'),
+
+    [Parameter()]
+    [ValidatePattern('^\d+(s|m|h)$')]
+    [string] $DefaultCertificateDuration = '24h',
+
+    [Parameter()]
+    [ValidatePattern('^\d+(s|m|h)$')]
+    [string] $MaximumCertificateDuration = '24h',
+
+    [Parameter()]
     [ValidateRange(1, 65535)]
     [int] $Port = 8000,
 
@@ -137,6 +151,108 @@ function Write-JsonFile {
     [IO.File]::WriteAllText($Path, $json, [Text.UTF8Encoding]::new($false))
 }
 
+function Set-CaIssuancePolicy {
+    param(
+        [Parameter(Mandatory)][object] $Configuration,
+        [Parameter(Mandatory)][string[]] $DnsNames,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $IpAddresses,
+        [Parameter(Mandatory)][string] $DefaultDuration,
+        [Parameter(Mandatory)][string] $MaximumDuration
+    )
+
+    $before = $Configuration | ConvertTo-Json -Depth 100 -Compress
+    if (-not $Configuration.authority) {
+        $Configuration | Add-Member -NotePropertyName authority -NotePropertyValue ([pscustomobject]@{})
+    }
+    if (-not $Configuration.authority.PSObject.Properties['claims'] -or -not $Configuration.authority.claims) {
+        $Configuration.authority | Add-Member -NotePropertyName claims -NotePropertyValue ([pscustomobject]@{})
+    }
+    $Configuration.authority.claims | Add-Member -Force -NotePropertyName defaultTLSCertDuration -NotePropertyValue $DefaultDuration
+    $Configuration.authority.claims | Add-Member -Force -NotePropertyName maxTLSCertDuration -NotePropertyValue $MaximumDuration
+    $Configuration.authority.claims | Add-Member -Force -NotePropertyName minTLSCertDuration -NotePropertyValue '5m'
+    $Configuration.authority | Add-Member -Force -NotePropertyName policy -NotePropertyValue ([pscustomobject]@{
+        x509 = [pscustomobject]@{
+            allow = [pscustomobject]@{ dns = @($DnsNames); ip = @($IpAddresses) }
+        }
+    })
+
+    $provisionersProperty = $Configuration.authority.PSObject.Properties['provisioners']
+    $provisioners = @()
+    if ($provisionersProperty) {
+        $provisioners = @($provisionersProperty.Value)
+    }
+    $hasAcmeProvisioner = @($provisioners | Where-Object { $_.type -eq 'ACME' }).Count -gt 0
+    if (-not $hasAcmeProvisioner) {
+        $provisioners = @($provisioners) + @([pscustomobject]@{
+            type = 'ACME'
+            name = 'acme'
+        })
+        $Configuration.authority | Add-Member -Force -NotePropertyName provisioners -NotePropertyValue $provisioners
+    }
+    $after = $Configuration | ConvertTo-Json -Depth 100 -Compress
+    return ($before -cne $after)
+}
+
+function Test-ExistingCaIssuancePolicy {
+    param(
+        [Parameter(Mandatory)][string] $StepExe,
+        [Parameter(Mandatory)][string] $CaPasswordFile,
+        [Parameter(Mandatory)][string] $CaUrl,
+        [Parameter(Mandatory)][string] $RootCertificate,
+        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $AllowedIpAddresses,
+        [Parameter(Mandatory)][string] $MaximumDuration
+    )
+    $provisionerPasswordPath = Join-Path $env:TEMP ("step-test-provisioner-pass-{0}.txt" -f [guid]::NewGuid())
+    $allowedCertificatePath = Join-Path $env:TEMP ("step-ca-allowed-{0}.crt" -f [guid]::NewGuid())
+    $allowedKeyPath = Join-Path $env:TEMP ("step-ca-allowed-{0}.key" -f [guid]::NewGuid())
+    $unauthorizedCertificatePath = Join-Path $env:TEMP ("step-ca-denied-{0}.crt" -f [guid]::NewGuid())
+    $unauthorizedKeyPath = Join-Path $env:TEMP ("step-ca-denied-{0}.key" -f [guid]::NewGuid())
+    $longLivedCertificatePath = Join-Path $env:TEMP ("step-ca-duration-denied-{0}.crt" -f [guid]::NewGuid())
+    $longLivedKeyPath = Join-Path $env:TEMP ("step-ca-duration-denied-{0}.key" -f [guid]::NewGuid())
+    $provisionerPassword = Read-Host 'Re-enter the dev-admin passphrase to verify the existing CA policy' -AsSecureString
+    $provisionerPasswordText = Convert-SecureStringToPlainText -Value $provisionerPassword
+    $provisionerPassword = $null
+    try {
+        Write-PasswordFile -Path $provisionerPasswordPath -Password $provisionerPasswordText
+        $provisionerPasswordText = $null
+        Set-AdminOnlyFileAcl -Path $provisionerPasswordPath
+        $commonArgs = @('--provisioner', 'dev-admin', '--provisioner-password-file', $provisionerPasswordPath,
+            '--password-file', $CaPasswordFile, '--ca-url', $CaUrl, '--root', $RootCertificate)
+        & $StepExe ca certificate localhost $allowedCertificatePath $allowedKeyPath @commonArgs --san localhost --not-after=5m
+        if ($LASTEXITCODE -ne 0) { throw 'The existing CA did not issue the allowed localhost test certificate.' }
+        foreach ($ipAddress in $AllowedIpAddresses) {
+            $ipCertificatePath = Join-Path $env:TEMP ("step-ca-allowed-ip-{0}.crt" -f [guid]::NewGuid())
+            $ipKeyPath = Join-Path $env:TEMP ("step-ca-allowed-ip-{0}.key" -f [guid]::NewGuid())
+            try {
+                & $StepExe ca certificate localhost $ipCertificatePath $ipKeyPath @commonArgs --san $ipAddress --not-after=5m
+                if ($LASTEXITCODE -ne 0) { throw "The existing CA did not issue a certificate for allowed IP SAN $ipAddress." }
+            }
+            finally { Remove-Item -LiteralPath $ipCertificatePath, $ipKeyPath -Force -ErrorAction SilentlyContinue }
+        }
+
+        & $StepExe ca certificate unauthorized.invalid $unauthorizedCertificatePath $unauthorizedKeyPath @commonArgs --san unauthorized.invalid --not-after=5m 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized.invalid.' }
+
+        $unauthorizedIpCertificatePath = Join-Path $env:TEMP ("step-ca-denied-ip-{0}.crt" -f [guid]::NewGuid())
+        $unauthorizedIpKeyPath = Join-Path $env:TEMP ("step-ca-denied-ip-{0}.key" -f [guid]::NewGuid())
+        try {
+            & $StepExe ca certificate localhost $unauthorizedIpCertificatePath $unauthorizedIpKeyPath @commonArgs --san '192.168.1.99' --not-after=5m 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
+        }
+        finally { Remove-Item -LiteralPath $unauthorizedIpCertificatePath, $unauthorizedIpKeyPath -Force -ErrorAction SilentlyContinue }
+
+        & $StepExe ca certificate localhost $longLivedCertificatePath $longLivedKeyPath @commonArgs --san localhost "--not-after=$($MaximumDuration)1h" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { throw 'Duration policy test failed: existing CA issued a certificate beyond the configured maximum.' }
+        Write-Host 'Existing CA allowed the approved name and denied the unlisted name and excessive lifetime.'
+    }
+    finally {
+        $provisionerPasswordText = $null
+        Remove-Item -LiteralPath $provisionerPasswordPath, $allowedCertificatePath, $allowedKeyPath, `
+            $unauthorizedCertificatePath, $unauthorizedKeyPath, $longLivedCertificatePath, $longLivedKeyPath `
+            -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Copy-DirectoryContents {
     param(
         [Parameter(Mandatory)][string] $Source,
@@ -190,6 +306,41 @@ if ($CaDnsName -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$') {
     throw 'Enter a DNS hostname (without https:// or a port).'
 }
 
+$dnsNameSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($dnsName in @($CaDnsName, 'localhost', $env:COMPUTERNAME) + $AllowedDnsNames) {
+    if (-not $dnsName -or $dnsName -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$') {
+        throw "AllowedDnsNames must contain exact DNS hostnames without wildcards, URLs, or ports. Invalid value: '$dnsName'."
+    }
+    [void]$dnsNameSet.Add($dnsName.TrimEnd('.').ToLowerInvariant())
+}
+$effectiveAllowedDnsNames = @($dnsNameSet | Sort-Object)
+$ipAddressSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($ipAddress in $AllowedIpAddresses) {
+    $parsedIpAddress = $null
+    if (-not $ipAddress -or $ipAddress -notmatch '^(?:\d{1,3}\.){3}\d{1,3}$' -or
+        -not [Net.IPAddress]::TryParse($ipAddress, [ref]$parsedIpAddress) -or
+        $parsedIpAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork) {
+        throw "AllowedIpAddresses must contain valid IPv4 addresses. Invalid value: '$ipAddress'."
+    }
+    [void]$ipAddressSet.Add($parsedIpAddress.ToString())
+}
+$effectiveAllowedIpAddresses = @($ipAddressSet | Sort-Object)
+function Convert-GoDurationToTimeSpan {
+    param([Parameter(Mandatory)][string] $Duration)
+    $amount = [int]($Duration -replace '[smh]$', '')
+    switch ($Duration.Substring($Duration.Length - 1)) {
+        's' { return [TimeSpan]::FromSeconds($amount) }
+        'm' { return [TimeSpan]::FromMinutes($amount) }
+        'h' { return [TimeSpan]::FromHours($amount) }
+    }
+}
+if ((Convert-GoDurationToTimeSpan $DefaultCertificateDuration) -gt (Convert-GoDurationToTimeSpan $MaximumCertificateDuration)) {
+    throw 'DefaultCertificateDuration must not exceed MaximumCertificateDuration.'
+}
+if ((Convert-GoDurationToTimeSpan $MaximumCertificateDuration) -lt [TimeSpan]::FromMinutes(5)) {
+    throw 'MaximumCertificateDuration must be at least 5m, the configured minimum certificate lifetime.'
+}
+
 $stepCaRoot = Join-Path $env:ProgramFiles 'Smallstep\step-ca'
 $toolDirectory = Join-Path $stepCaRoot $StepCaVersion
 $serviceDirectory = Join-Path $stepCaRoot 'service'
@@ -234,7 +385,19 @@ if ($existingService) {
     Write-Host "Existing step-ca version: $existingVersion"
     Write-Host "Existing step CLI version: $(& $stepExe version)"
 
-    if ($existingService.Status -ne 'Running') {
+    $existingConfig = Get-Content -LiteralPath $caConfigPath -Raw | ConvertFrom-Json
+    $policyChanged = Set-CaIssuancePolicy -Configuration $existingConfig -DnsNames $effectiveAllowedDnsNames `
+        -IpAddresses $effectiveAllowedIpAddresses `
+        -DefaultDuration $DefaultCertificateDuration -MaximumDuration $MaximumCertificateDuration
+    if ($policyChanged) {
+        if ($existingService.Status -eq 'Running') {
+            & $winswPath stop
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stop the existing CA service to apply the issuance policy.' }
+        }
+        Write-JsonFile -Path $caConfigPath -Value $existingConfig
+    }
+
+    if ($existingService.Status -ne 'Running' -or $policyChanged) {
         & $winswPath start
         if ($LASTEXITCODE -ne 0) { throw "Could not start existing service; WinSW exit code $LASTEXITCODE." }
     }
@@ -245,7 +408,11 @@ if ($existingService) {
     & $stepExe ca health --ca-url "https://localhost:$Port" --root $rootCertificatePath
     if ($LASTEXITCODE -ne 0) { throw "Existing CA health check failed. Check $logsPath." }
 
-    Write-Host 'CA setup already exists and is healthy; no CA files or service configuration were changed.'
+    Test-ExistingCaIssuancePolicy -StepExe $stepExe -CaPasswordFile $passwordFilePath `
+        -CaUrl "https://localhost:$Port" -RootCertificate $rootCertificatePath `
+        -AllowedIpAddresses $effectiveAllowedIpAddresses -MaximumDuration $MaximumCertificateDuration
+
+    Write-Host 'Existing CA setup is healthy; issuance policy configuration is applied.'
     exit 0
 }
 if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
@@ -400,6 +567,7 @@ else {
                 '--address', ":$Port",
                 '--with-ca-url', "https://${CaDnsName}:$Port",
                 '--provisioner', 'dev-admin',
+                '--acme',
                 '--password-file', $passwordFilePath,
                 '--provisioner-password-file', $provisionerPasswordFile
             )
@@ -437,6 +605,9 @@ else {
     $caConfig.crt = $intermediateCertificatePath
     $caConfig.key = $intermediateKeyPath
     $caConfig.address = ":$Port"
+    [void](Set-CaIssuancePolicy -Configuration $caConfig -DnsNames $effectiveAllowedDnsNames `
+        -IpAddresses $effectiveAllowedIpAddresses `
+        -DefaultDuration $DefaultCertificateDuration -MaximumDuration $MaximumCertificateDuration)
     $dbProperty = $caConfig.PSObject.Properties['db']
     if ($dbProperty -and $caConfig.db) {
         $caConfig.db.dataSource = Join-Path $DataRoot 'db'
@@ -460,6 +631,9 @@ else {
 
 $caConfig = Get-Content -LiteralPath $caConfigPath -Raw | ConvertFrom-Json
 $caConfig.address = ":$Port"
+[void](Set-CaIssuancePolicy -Configuration $caConfig -DnsNames $effectiveAllowedDnsNames `
+    -IpAddresses $effectiveAllowedIpAddresses `
+    -DefaultDuration $DefaultCertificateDuration -MaximumDuration $MaximumCertificateDuration)
 Write-JsonFile -Path $caConfigPath -Value $caConfig
 
 $xml = @"
@@ -525,7 +699,7 @@ $testKeyPath = Join-Path $env:TEMP ("step-ca-test-{0}.key" -f [guid]::NewGuid())
 $testBundlePath = Join-Path $env:TEMP ("step-ca-test-{0}-chain.crt" -f [guid]::NewGuid())
 try {
     $issueArgs = @(
-        'ca', 'certificate', 'https-setup-check', $testCertificatePath, $testKeyPath,
+        'ca', 'certificate', 'localhost', $testCertificatePath, $testKeyPath,
         '--provisioner', 'dev-admin',
         '--provisioner-password-file', $testProvisionerPasswordFile,
         '--password-file', $passwordFilePath,
@@ -544,6 +718,80 @@ try {
     & $stepExe certificate verify $testBundlePath --roots $rootCertificatePath --host 'localhost'
     if ($LASTEXITCODE -ne 0) { throw 'The test leaf certificate did not validate to the offline root.' }
     Write-Host 'Test leaf certificate issued and verified to the offline root.'
+
+    foreach ($ipAddress in $effectiveAllowedIpAddresses) {
+        $ipCertificatePath = Join-Path $env:TEMP ("step-ca-ip-test-{0}.crt" -f [guid]::NewGuid())
+        $ipKeyPath = Join-Path $env:TEMP ("step-ca-ip-test-{0}.key" -f [guid]::NewGuid())
+        $ipIssueArgs = @(
+            'ca', 'certificate', 'localhost', $ipCertificatePath, $ipKeyPath,
+            '--provisioner', 'dev-admin',
+            '--provisioner-password-file', $testProvisionerPasswordFile,
+            '--password-file', $passwordFilePath,
+            '--ca-url', "https://localhost:$Port",
+            '--root', $rootCertificatePath,
+            '--san', $ipAddress,
+            '--not-after=5m'
+        )
+        & $stepExe @ipIssueArgs 2>&1 | Out-Null
+        $ipIssueExitCode = $LASTEXITCODE
+        Remove-Item -LiteralPath $ipCertificatePath, $ipKeyPath -Force -ErrorAction SilentlyContinue
+        if ($ipIssueExitCode -ne 0) { throw "Issuance policy test failed: CA did not issue for approved IP SAN $ipAddress." }
+        Write-Host "Approved IP SAN was accepted: $ipAddress"
+    }
+
+    $unauthorizedIpCertificatePath = Join-Path $env:TEMP ("step-ca-denied-ip-{0}.crt" -f [guid]::NewGuid())
+    $unauthorizedIpKeyPath = Join-Path $env:TEMP ("step-ca-denied-ip-{0}.key" -f [guid]::NewGuid())
+    try {
+        $unauthorizedIpArgs = @(
+            'ca', 'certificate', 'localhost', $unauthorizedIpCertificatePath, $unauthorizedIpKeyPath,
+            '--provisioner', 'dev-admin',
+            '--provisioner-password-file', $testProvisionerPasswordFile,
+            '--password-file', $passwordFilePath,
+            '--ca-url', "https://localhost:$Port",
+            '--root', $rootCertificatePath,
+            '--san', '192.168.1.99',
+            '--not-after=5m'
+        )
+        & $stepExe @unauthorizedIpArgs 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
+    }
+    finally { Remove-Item -LiteralPath $unauthorizedIpCertificatePath, $unauthorizedIpKeyPath -Force -ErrorAction SilentlyContinue }
+
+    $unauthorizedCertificatePath = Join-Path $env:TEMP ("step-ca-denied-{0}.crt" -f [guid]::NewGuid())
+    $unauthorizedKeyPath = Join-Path $env:TEMP ("step-ca-denied-{0}.key" -f [guid]::NewGuid())
+    $unauthorizedArgs = @(
+        'ca', 'certificate', 'unauthorized.invalid', $unauthorizedCertificatePath, $unauthorizedKeyPath,
+        '--provisioner', 'dev-admin',
+        '--provisioner-password-file', $testProvisionerPasswordFile,
+        '--password-file', $passwordFilePath,
+        '--ca-url', "https://localhost:$Port",
+        '--root', $rootCertificatePath,
+        '--san', 'unauthorized.invalid',
+        '--not-after=5m'
+    )
+    & $stepExe @unauthorizedArgs 2>&1 | Out-Null
+    $unauthorizedExitCode = $LASTEXITCODE
+    Remove-Item -LiteralPath $unauthorizedCertificatePath, $unauthorizedKeyPath -Force -ErrorAction SilentlyContinue
+    if ($unauthorizedExitCode -eq 0) { throw 'Issuance policy test failed: CA issued a certificate for unauthorized.invalid.' }
+    Write-Host 'Unauthorized SAN request was denied by the CA policy.'
+
+    $longLivedCertificatePath = Join-Path $env:TEMP ("step-ca-duration-denied-{0}.crt" -f [guid]::NewGuid())
+    $longLivedKeyPath = Join-Path $env:TEMP ("step-ca-duration-denied-{0}.key" -f [guid]::NewGuid())
+    $longDurationArgs = @(
+        'ca', 'certificate', 'localhost', $longLivedCertificatePath, $longLivedKeyPath,
+        '--provisioner', 'dev-admin',
+        '--provisioner-password-file', $testProvisionerPasswordFile,
+        '--password-file', $passwordFilePath,
+        '--ca-url', "https://localhost:$Port",
+        '--root', $rootCertificatePath,
+        '--san', 'localhost',
+        "--not-after=$($MaximumCertificateDuration)1h"
+    )
+    & $stepExe @longDurationArgs 2>&1 | Out-Null
+    $longDurationExitCode = $LASTEXITCODE
+    Remove-Item -LiteralPath $longLivedCertificatePath, $longLivedKeyPath -Force -ErrorAction SilentlyContinue
+    if ($longDurationExitCode -eq 0) { throw 'Duration policy test failed: CA accepted a certificate at the configured maximum; request a longer duration to validate the limit.' }
+    Write-Host 'Certificate duration above the configured maximum was denied.'
 }
 finally {
     Remove-Item -LiteralPath $testProvisionerPasswordFile, $testCertificatePath, $testKeyPath, $testBundlePath -Force -ErrorAction SilentlyContinue
@@ -559,4 +807,5 @@ if ($usbRootKeyPath) {
     Write-Host 'Reconnect network access now if required for development clients.'
 }
 Write-Host 'No Windows Firewall rules were created or changed.'
+
 
