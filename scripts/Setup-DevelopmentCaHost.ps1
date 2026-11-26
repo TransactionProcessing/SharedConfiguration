@@ -176,15 +176,18 @@ function Set-CaIssuancePolicy {
         }
     })
 
-    $provisioners = if ($Configuration.authority.PSObject.Properties['provisioners']) {
-        @($Configuration.authority.provisioners)
+    $provisionersProperty = $Configuration.authority.PSObject.Properties['provisioners']
+    $provisioners = @()
+    if ($provisionersProperty) {
+        $provisioners = @($provisionersProperty.Value)
     }
-    else { @() }
-    if (-not ($provisioners | Where-Object { $_.type -eq 'ACME' })) {
-        $Configuration.authority | Add-Member -Force -NotePropertyName provisioners -NotePropertyValue @($provisioners + [pscustomobject]@{
+    $hasAcmeProvisioner = @($provisioners | Where-Object { $_.type -eq 'ACME' }).Count -gt 0
+    if (-not $hasAcmeProvisioner) {
+        $provisioners = @($provisioners) + @([pscustomobject]@{
             type = 'ACME'
             name = 'acme'
         })
+        $Configuration.authority | Add-Member -Force -NotePropertyName provisioners -NotePropertyValue $provisioners
     }
     $after = $Configuration | ConvertTo-Json -Depth 100 -Compress
     return ($before -cne $after)
@@ -384,6 +387,7 @@ if ($existingService) {
 
     $existingConfig = Get-Content -LiteralPath $caConfigPath -Raw | ConvertFrom-Json
     $policyChanged = Set-CaIssuancePolicy -Configuration $existingConfig -DnsNames $effectiveAllowedDnsNames `
+        -IpAddresses $effectiveAllowedIpAddresses `
         -DefaultDuration $DefaultCertificateDuration -MaximumDuration $MaximumCertificateDuration
     if ($policyChanged) {
         if ($existingService.Status -eq 'Running') {
