@@ -438,18 +438,24 @@ if ($existingService) {
 if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
     throw "Port $Port is already listening. Choose a free port before setting up the CA."
 }
-if ((Test-Path -LiteralPath $DataRoot) -and -not (Test-Path -LiteralPath $caConfigPath) -and
-    @(Get-ChildItem -LiteralPath $DataRoot -Force -ErrorAction SilentlyContinue).Count -gt 0) {
-    throw "$DataRoot is not empty but has no CA configuration. Review its contents before rerunning; the script will not overwrite partial setup data."
+if ((Test-Path -LiteralPath $DataRoot) -and -not (Test-Path -LiteralPath $caConfigPath)) {
+    $allowedScaffoldDirectories = @(
+        (Join-Path $DataRoot 'certs'),
+        (Join-Path $DataRoot 'config'),
+        (Join-Path $DataRoot 'secrets'),
+        $logsPath
+    ) | ForEach-Object { [IO.Path]::GetFullPath($_) }
+    $existingDataItems = @(Get-ChildItem -LiteralPath $DataRoot -Force -Recurse -ErrorAction Stop)
+    $unexpectedDataItems = @($existingDataItems | Where-Object {
+        -not $_.PSIsContainer -or $allowedScaffoldDirectories -notcontains [IO.Path]::GetFullPath($_.FullName)
+    })
+    if ($unexpectedDataItems.Count -gt 0) {
+        throw "$DataRoot contains files or unexpected directories but has no CA configuration. Review its contents before rerunning; the script will not overwrite partial setup data. Unexpected entries: $($unexpectedDataItems.FullName -join ', ')"
+    }
+    if ($existingDataItems.Count -gt 0) {
+        Write-Host "Found only empty setup directories in $DataRoot from an earlier failed attempt; safe to reuse."
+    }
 }
-
-New-Item -ItemType Directory -Path $DataRoot, (Join-Path $DataRoot 'certs'), (Join-Path $DataRoot 'config'), `
-    (Join-Path $DataRoot 'secrets'), $logsPath, $toolDirectory, $serviceDirectory -Force | Out-Null
-Set-DirectoryAcl -Path $DataRoot
-Set-DirectoryAcl -Path (Join-Path $DataRoot 'certs')
-Set-DirectoryAcl -Path (Join-Path $DataRoot 'config')
-Set-DirectoryAcl -Path (Join-Path $DataRoot 'secrets')
-Set-DirectoryAcl -Path $logsPath
 
 $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
 if (-not $winget) { throw 'WinGet is required for checksum-verified Smallstep installation. Install App Installer and rerun.' }
@@ -468,6 +474,7 @@ $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $env:Path = @($machinePath, $userPath) -join ';'
 $stepCommand = Get-Command step -CommandType Application -ErrorAction Stop
 $stepCaCommand = Get-Command step-ca -CommandType Application -ErrorAction Stop
+New-Item -ItemType Directory -Path $toolDirectory -Force | Out-Null
 Copy-Item -LiteralPath $stepCommand.Source -Destination $stepExe -Force
 Copy-Item -LiteralPath $stepCaCommand.Source -Destination $stepCaExe -Force
 
@@ -481,6 +488,14 @@ if ($LASTEXITCODE -ne 0 -or $stepCaVersionOutput -notmatch [regex]::Escape($Step
 }
 Write-Host "Installed: $stepCaVersionOutput"
 Write-Host "Installed step CLI: $stepCliVersionOutput"
+
+New-Item -ItemType Directory -Path $DataRoot, (Join-Path $DataRoot 'certs'), (Join-Path $DataRoot 'config'), `
+    (Join-Path $DataRoot 'secrets'), $logsPath, $serviceDirectory -Force | Out-Null
+Set-DirectoryAcl -Path $DataRoot
+Set-DirectoryAcl -Path (Join-Path $DataRoot 'certs')
+Set-DirectoryAcl -Path (Join-Path $DataRoot 'config')
+Set-DirectoryAcl -Path (Join-Path $DataRoot 'secrets')
+Set-DirectoryAcl -Path $logsPath
 
 Get-WinSwBinary -Version $WinSwVersion -Destination $winswPath
 
