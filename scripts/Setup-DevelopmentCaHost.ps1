@@ -462,11 +462,11 @@ if (-not $winget) { throw 'WinGet is required for checksum-verified Smallstep in
 
 Write-Host "Installing Smallstep.step-ca $StepCaVersion with WinGet."
 & $winget.Source install --id Smallstep.step-ca --exact --version $StepCaVersion `
-    --accept-source-agreements --accept-package-agreements --disable-interactivity
+    --no-upgrade --accept-source-agreements --accept-package-agreements --disable-interactivity
 if ($LASTEXITCODE -ne 0) { throw "WinGet failed with exit code $LASTEXITCODE." }
 Write-Host "Installing Smallstep.step $StepCliVersion with WinGet for the step CLI."
 & $winget.Source install --id Smallstep.step --exact --version $StepCliVersion `
-    --accept-source-agreements --accept-package-agreements --disable-interactivity
+    --no-upgrade --accept-source-agreements --accept-package-agreements --disable-interactivity
 if ($LASTEXITCODE -ne 0) { throw "WinGet failed to install the Step CLI with exit code $LASTEXITCODE." }
 
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
