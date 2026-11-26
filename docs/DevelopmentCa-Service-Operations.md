@@ -20,7 +20,7 @@ To remove only the Windows service registration:
 
 The helper requires the operator to type UNINSTALL, stops the service, and invokes WinSW uninstall. It preserves the CA configuration, online intermediate key, root certificate, logs, WinSW wrapper, and installed Smallstep binaries. It never deletes the CA data directory.
 
-To roll back, rerun scripts/Setup-DevelopmentCaHost.ps1 with the same CA version, CA DNS name, port, and DataRoot. The existing CA files are reused to reinstall and start the Windows service. Keep the offline root-key USB devices unplugged and stored safely.
+To roll back, rerun scripts/Setup-DevelopmentCaHost.ps1 with the same CA version, CA address (DNS name or IP), port, and DataRoot. The existing CA files are reused to reinstall and start the Windows service. Keep the offline root-key USB devices unplugged and stored safely.
 
 The helper does not remove certificates from Windows trust stores, delete CA data, or modify firewall rules.
 

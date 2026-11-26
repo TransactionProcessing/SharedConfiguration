@@ -9,7 +9,8 @@ param(
     [string] $WinSwVersion = '2.14.0',
 
     [Parameter()]
-    [string] $CaDnsName,
+    [Alias('CaDnsName')]
+    [string] $CaAddress,
 
     [Parameter()]
     [string[]] $AllowedDnsNames = @(),
@@ -301,13 +302,21 @@ if (-not $StepCaVersion) {
 }
 if ($StepCaVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Step CA version must be an exact x.y.z value.' }
 
-if (-not $CaDnsName) { $CaDnsName = Read-Host 'Enter the stable DNS name development services will use for the CA' }
-if ($CaDnsName -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$') {
-    throw 'Enter a DNS hostname (without https:// or a port).'
+if (-not $CaAddress) { $CaAddress = Read-Host 'Enter the CA DNS name or IPv4 address clients will use (without https:// or a port)' }
+$caEndpointIp = $null
+$caEndpointIsIp = [Net.IPAddress]::TryParse($CaAddress, [ref]$caEndpointIp) -and
+    $caEndpointIp.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork
+if (-not $caEndpointIsIp -and $CaAddress -notmatch '^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)(?:\.(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?))*\.?$') {
+    throw 'Enter a DNS hostname or IPv4 address (without https:// or a port).'
 }
+$caEndpoint = if ($caEndpointIsIp) { $caEndpointIp.ToString() } else { $CaAddress.TrimEnd('.').ToLowerInvariant() }
+$caUrl = "https://${caEndpoint}:$Port"
+$caTlsNames = @($caEndpoint, 'localhost', $env:COMPUTERNAME) | Select-Object -Unique
 
 $dnsNameSet = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($dnsName in @($CaDnsName, 'localhost', $env:COMPUTERNAME) + $AllowedDnsNames) {
+$baseDnsNames = @('localhost', $env:COMPUTERNAME)
+if (-not $caEndpointIsIp) { $baseDnsNames = @($caEndpoint) + $baseDnsNames }
+foreach ($dnsName in $baseDnsNames + $AllowedDnsNames) {
     if (-not $dnsName -or $dnsName -notmatch '^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$') {
         throw "AllowedDnsNames must contain exact DNS hostnames without wildcards, URLs, or ports. Invalid value: '$dnsName'."
     }
@@ -389,15 +398,19 @@ if ($existingService) {
     $policyChanged = Set-CaIssuancePolicy -Configuration $existingConfig -DnsNames $effectiveAllowedDnsNames `
         -IpAddresses $effectiveAllowedIpAddresses `
         -DefaultDuration $DefaultCertificateDuration -MaximumDuration $MaximumCertificateDuration
-    if ($policyChanged) {
+    $existingTlsNames = @($existingConfig.dnsNames)
+    $tlsNamesChanged = (@($existingTlsNames) -join "`n") -cne (@($caTlsNames) -join "`n")
+    if ($tlsNamesChanged) { $existingConfig.dnsNames = @($caTlsNames) }
+    $configurationChanged = $policyChanged -or $tlsNamesChanged
+    if ($configurationChanged) {
         if ($existingService.Status -eq 'Running') {
             & $winswPath stop
-            if ($LASTEXITCODE -ne 0) { throw 'Could not stop the existing CA service to apply the issuance policy.' }
+            if ($LASTEXITCODE -ne 0) { throw 'Could not stop the existing CA service to apply the configuration.' }
         }
         Write-JsonFile -Path $caConfigPath -Value $existingConfig
     }
 
-    if ($existingService.Status -ne 'Running' -or $policyChanged) {
+    if ($existingService.Status -ne 'Running' -or $configurationChanged) {
         & $winswPath start
         if ($LASTEXITCODE -ne 0) { throw "Could not start existing service; WinSW exit code $LASTEXITCODE." }
     }
@@ -407,12 +420,13 @@ if ($existingService) {
     }
     & $stepExe ca health --ca-url "https://localhost:$Port" --root $rootCertificatePath
     if ($LASTEXITCODE -ne 0) { throw "Existing CA health check failed. Check $logsPath." }
-
+    & $stepExe ca health --ca-url $caUrl --root $rootCertificatePath
+    if ($LASTEXITCODE -ne 0) { throw "Existing CA health check failed using configured endpoint $caUrl. Check the CA TLS names and $logsPath." }
     Test-ExistingCaIssuancePolicy -StepExe $stepExe -CaPasswordFile $passwordFilePath `
         -CaUrl "https://localhost:$Port" -RootCertificate $rootCertificatePath `
         -AllowedIpAddresses $effectiveAllowedIpAddresses -MaximumDuration $MaximumCertificateDuration
 
-    Write-Host 'Existing CA setup is healthy; issuance policy configuration is applied.'
+    Write-Host "Existing CA setup is healthy at $caUrl; issuance policy configuration is applied."
     exit 0
 }
 if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
@@ -561,11 +575,11 @@ else {
                 '--key', $usbRootKeyPath,
                 '--key-password-file', $rootPasswordFile,
                 '--name', 'Transaction Processing Development CA',
-                '--dns', $CaDnsName,
+                '--dns', $caEndpoint,
                 '--dns', 'localhost',
                 '--dns', $env:COMPUTERNAME,
                 '--address', ":$Port",
-                '--with-ca-url', "https://${CaDnsName}:$Port",
+                '--with-ca-url', $caUrl,
                 '--provisioner', 'dev-admin',
                 '--acme',
                 '--password-file', $passwordFilePath,
@@ -605,6 +619,7 @@ else {
     $caConfig.crt = $intermediateCertificatePath
     $caConfig.key = $intermediateKeyPath
     $caConfig.address = ":$Port"
+    $caConfig.dnsNames = @($caTlsNames)
     [void](Set-CaIssuancePolicy -Configuration $caConfig -DnsNames $effectiveAllowedDnsNames `
         -IpAddresses $effectiveAllowedIpAddresses `
         -DefaultDuration $DefaultCertificateDuration -MaximumDuration $MaximumCertificateDuration)
@@ -616,14 +631,6 @@ else {
         }
     }
     Write-JsonFile -Path $caConfigPath -Value $caConfig
-    $defaultsPath = Join-Path $DataRoot 'config\defaults.json'
-    if (Test-Path -LiteralPath $defaultsPath) {
-        $defaults = Get-Content -LiteralPath $defaultsPath -Raw | ConvertFrom-Json
-        $defaults.root = $rootCertificatePath
-        $defaults.'ca-url' = "https://${CaDnsName}:$Port"
-        Write-JsonFile -Path $defaultsPath -Value $defaults
-    }
-
     & icacls.exe $passwordFilePath /inheritance:r /grant:r `
         '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not restrict permissions on the CA passphrase file.' }
@@ -631,10 +638,18 @@ else {
 
 $caConfig = Get-Content -LiteralPath $caConfigPath -Raw | ConvertFrom-Json
 $caConfig.address = ":$Port"
+$caConfig.dnsNames = @($caTlsNames | Select-Object -Unique)
 [void](Set-CaIssuancePolicy -Configuration $caConfig -DnsNames $effectiveAllowedDnsNames `
     -IpAddresses $effectiveAllowedIpAddresses `
     -DefaultDuration $DefaultCertificateDuration -MaximumDuration $MaximumCertificateDuration)
 Write-JsonFile -Path $caConfigPath -Value $caConfig
+$defaultsPath = Join-Path $DataRoot 'config\defaults.json'
+if (Test-Path -LiteralPath $defaultsPath) {
+    $defaults = Get-Content -LiteralPath $defaultsPath -Raw | ConvertFrom-Json
+    $defaults.root = $rootCertificatePath
+    $defaults.'ca-url' = $caUrl
+    Write-JsonFile -Path $defaultsPath -Value $defaults
+}
 
 $xml = @"
 <service>
@@ -687,6 +702,8 @@ if ($service.Status -ne 'Running') { throw "CA service did not reach Running sta
 
 & $stepExe ca health --ca-url "https://localhost:$Port" --root $rootCertificatePath
 if ($LASTEXITCODE -ne 0) { throw "step ca health failed. Check the WinSW logs under $logsPath." }
+& $stepExe ca health --ca-url $caUrl --root $rootCertificatePath
+if ($LASTEXITCODE -ne 0) { throw "CA health check failed using configured endpoint $caUrl. Confirm the CA TLS certificate includes this endpoint and check $logsPath." }
 
 $testProvisionerPassword = Read-Host 'Re-enter the dev-admin provisioner passphrase to issue a temporary test certificate' -AsSecureString
 $testProvisionerPasswordText = Convert-SecureStringToPlainText -Value $testProvisionerPassword
@@ -798,7 +815,7 @@ finally {
 }
 
 Write-Host ''
-Write-Host "Development CA is running at https://${CaDnsName}:$Port"
+Write-Host "Development CA is running at $caUrl"
 Write-Host "Root certificate: $rootCertificatePath"
 if ($usbRootKeyPath) {
     Write-Host "Offline root-key USB location (keep unplugged): $usbRootKeyPath"

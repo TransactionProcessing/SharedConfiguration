@@ -4,13 +4,22 @@
 
 ## Allowed DNS names
 
-The script writes authority-wide X.509 DNS and IP allow-lists to `ca.json`. By default, DNS names are limited to the CA DNS name, `localhost`, and the Windows computer name. The IP allow-list includes the development server `192.168.1.86` and staging server `192.168.1.163`.
+The script writes authority-wide X.509 DNS and IP allow-lists to `ca.json`. By default, DNS names are limited to the CA DNS name (when the CA is addressed by DNS), `localhost`, and the Windows computer name. The IP allow-list includes the development server `192.168.1.86` and staging server `192.168.1.163`.
+
+Use `-CaAddress` to set the CA endpoint to either a DNS name or an IPv4 address. The selected endpoint is included in the CA's HTTPS certificate and in the client URL. `-CaDnsName` remains an accepted alias for existing commands. For example, to have clients connect directly to the development server IP:
+
+```powershell
+.\scripts\Setup-DevelopmentCaHost.ps1 `
+  -StepCaVersion '0.30.2' `
+  -CaAddress '192.168.1.86' `
+  -Port 8000
+```
 
 When clients will connect by IP address, the issued certificate must contain an IP SAN matching that address. To authorize additional server IPs, use `-AllowedIpAddresses`; to add DNS aliases, use `-AllowedDnsNames`:
 
 ```powershell
 .\scripts\Setup-DevelopmentCaHost.ps1 `
-  -CaDnsName 'dev-ca.example.test' `
+  -CaAddress 'dev-ca.example.test' `
   -AllowedDnsNames @('orders.dev.example.test', 'payments.dev.example.test') `
   -AllowedIpAddresses @('192.168.1.86', '192.168.1.163')
 ```
