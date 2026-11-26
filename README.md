@@ -35,3 +35,8 @@ The image uses `mcr.microsoft.com/dotnet/aspnet:11.0` as its base and places the
 The GitHub Actions pull-request workflow builds the Docker image. Publishing a GitHub release builds and publishes the Linux image and packages the contents of `config/` as `sharedconfig.zip`. For non-prerelease releases, the release workflow deploys that package to `C:\home\txnproc\config` on the staging server and then the production server.
 
 The release workflow requires Docker Hub credentials and configured staging and production Windows runners/environments. Check those workflow settings before relying on an automated release or deployment.
+
+## Development CA operations
+
+The development step-ca recovery procedure is documented in [Development CA recovery](docs/DevelopmentCa-Recovery.md). It covers backing up and restoring the online CA state; key rotation is not covered there.
+
