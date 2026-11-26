@@ -758,10 +758,10 @@ $xml = @"
   <log mode="roll" />
   <onfailure action="restart" delay="10 sec" />
   <onfailure action="restart" delay="30 sec" />
+  <!-- WinSW must not pre-grant the service-logon right for this virtual account; it is not resolvable until SCM creates the service. -->
   <serviceaccount>
     <domain>NT SERVICE</domain>
     <user>$serviceName</user>
-    <allowservicelogon>true</allowservicelogon>
   </serviceaccount>
 </service>
 "@
