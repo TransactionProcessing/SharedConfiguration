@@ -71,7 +71,7 @@ Do not delete or overwrite an older known-good backup until the new backup has b
 
 1. Keep both root-key USB devices disconnected. They are not needed to restore the existing intermediate CA.
 2. Stop the service with `Stop-Service -Name StepCaDevelopment`. Preserve the damaged data directory under a different name before restoring anything.
-3. Verify the backup files against the adjacent SHA-256 manifest. Restore the backup contents to the original `DataRoot`, preserving the `certs`, `config`, `db`, `valuedb`, and `secrets` subdirectories. Do not restore logs, `ca-password`, or a root private key.
+3. Verify the backup files against `backup-manifest.csv` in the backup directory. Restore the backup contents to the original `DataRoot`, preserving the `certs`, `config`, `db`, `valuedb`, and `secrets` subdirectories. Do not restore logs, `ca-password`, or a root private key.
 4. Recreate `secrets\ca-password` from the CA key passphrase held in the protected secret store. This example prompts securely, writes BOM-free UTF-8, and applies the required ACL; do not put the passphrase in a command line, script, transcript, or log.
 
    ```powershell
