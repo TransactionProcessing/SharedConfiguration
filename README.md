@@ -40,4 +40,6 @@ The release workflow requires Docker Hub credentials and configured staging and 
 
 The development step-ca recovery procedure is documented in [Development CA recovery](docs/DevelopmentCa-Recovery.md). It covers backing up and restoring the online CA state; key rotation is not covered there.
 
+Service crash recovery testing and a state-preserving uninstall/rollback procedure are documented in [Development CA service operations](docs/DevelopmentCa-Service-Operations.md).
+
 The CA's HTTPS listener, DNS issuance allow-list, ACME provisioner, certificate lifetimes, and network exposure caveat are documented in [Development CA issuance policy](docs/DevelopmentCa-Issuance-Policy.md).
