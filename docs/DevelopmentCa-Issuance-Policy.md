@@ -4,15 +4,18 @@
 
 ## Allowed DNS names
 
-The script writes an authority-wide X.509 DNS allow-list to `ca.json`. By default, the exact allowed names are the CA DNS name, `localhost`, and the Windows computer name. Add service hostnames with `-AllowedDnsNames` when creating or updating the CA, for example:
+The script writes authority-wide X.509 DNS and IP allow-lists to `ca.json`. By default, DNS names are limited to the CA DNS name, `localhost`, and the Windows computer name. The IP allow-list includes the development server `192.168.1.86` and staging server `192.168.1.163`.
+
+When clients will connect by IP address, the issued certificate must contain an IP SAN matching that address. To authorize additional server IPs, use `-AllowedIpAddresses`; to add DNS aliases, use `-AllowedDnsNames`:
 
 ```powershell
 .\scripts\Setup-DevelopmentCaHost.ps1 `
   -CaDnsName 'dev-ca.example.test' `
-  -AllowedDnsNames @('orders.dev.example.test', 'payments.dev.example.test')
+  -AllowedDnsNames @('orders.dev.example.test', 'payments.dev.example.test') `
+  -AllowedIpAddresses @('192.168.1.86', '192.168.1.163')
 ```
 
-The list does not accept wildcards. Every DNS SAN in an X.509 request must match an allowed name. The script's post-install checks issue a certificate for `localhost` and confirm that an unlisted name is rejected. The configured list replaces any previous authority X.509 policy when the script applies it, so include every development service DNS name that should be issuable.
+Neither list accepts wildcards. Every DNS or IP SAN in an X.509 request must match its corresponding allow-list. The script's checks issue for `localhost` and the listed IPs, then confirm unlisted DNS and IP identities are rejected. Applying the policy replaces any previous authority X.509 policy, so include every server identity that should be issuable.
 
 ## Provisioners and certificate lifetimes
 
