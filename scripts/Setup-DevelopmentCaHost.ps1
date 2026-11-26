@@ -460,23 +460,59 @@ if ((Test-Path -LiteralPath $DataRoot) -and -not (Test-Path -LiteralPath $caConf
 $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
 if (-not $winget) { throw 'WinGet is required for checksum-verified Smallstep installation. Install App Installer and rerun.' }
 
-Write-Host "Installing Smallstep.step-ca $StepCaVersion with WinGet."
-& $winget.Source install --id Smallstep.step-ca --exact --version $StepCaVersion `
-    --no-upgrade --accept-source-agreements --accept-package-agreements --disable-interactivity
-if ($LASTEXITCODE -ne 0) { throw "WinGet failed with exit code $LASTEXITCODE." }
-Write-Host "Installing Smallstep.step $StepCliVersion with WinGet for the step CLI."
-& $winget.Source install --id Smallstep.step --exact --version $StepCliVersion `
-    --no-upgrade --accept-source-agreements --accept-package-agreements --disable-interactivity
-if ($LASTEXITCODE -ne 0) { throw "WinGet failed to install the Step CLI with exit code $LASTEXITCODE." }
+function Refresh-ProcessPath {
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $wingetLinksPath = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
+    $env:Path = @($machinePath, $userPath, $wingetLinksPath) -join ';'
+}
 
-$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-$env:Path = @($machinePath, $userPath) -join ';'
-$stepCommand = Get-Command step -CommandType Application -ErrorAction Stop
-$stepCaCommand = Get-Command step-ca -CommandType Application -ErrorAction Stop
+function Get-InstalledSmallstepCommand {
+    param(
+        [Parameter(Mandatory)][string] $CommandName,
+        [Parameter(Mandatory)][string] $ExpectedVersion
+    )
+
+    $command = Get-Command $CommandName -CommandType Application -ErrorAction SilentlyContinue
+    if (-not $command) { return $null }
+
+    $versionOutput = (& $command.Source version 2>&1 | Out-String)
+    if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($ExpectedVersion)) {
+        throw "$CommandName is already available at '$($command.Source)' but did not report requested version $ExpectedVersion. Output: $versionOutput"
+    }
+    return $command.Source
+}
+
+function Ensure-SmallstepPackage {
+    param(
+        [Parameter(Mandatory)][string] $PackageId,
+        [Parameter(Mandatory)][string] $Version,
+        [Parameter(Mandatory)][string] $CommandName
+    )
+
+    Refresh-ProcessPath
+    $installedCommand = Get-InstalledSmallstepCommand -CommandName $CommandName -ExpectedVersion $Version
+    if ($installedCommand) {
+        Write-Host "$PackageId $Version is already installed; reusing $installedCommand."
+        return $installedCommand
+    }
+
+    Write-Host "Installing $PackageId $Version with WinGet."
+    & $winget.Source install --id $PackageId --exact --version $Version `
+        --accept-source-agreements --accept-package-agreements --disable-interactivity
+    if ($LASTEXITCODE -ne 0) { throw "WinGet failed to install $PackageId $Version with exit code $LASTEXITCODE." }
+
+    Refresh-ProcessPath
+    $installedCommand = Get-InstalledSmallstepCommand -CommandName $CommandName -ExpectedVersion $Version
+    if (-not $installedCommand) { throw "WinGet installed $PackageId, but the '$CommandName' command was not found on PATH. Restart elevated PowerShell and rerun setup." }
+    return $installedCommand
+}
+
+$stepSource = Ensure-SmallstepPackage -PackageId 'Smallstep.step' -Version $StepCliVersion -CommandName 'step'
+$stepCaSource = Ensure-SmallstepPackage -PackageId 'Smallstep.step-ca' -Version $StepCaVersion -CommandName 'step-ca'
 New-Item -ItemType Directory -Path $toolDirectory -Force | Out-Null
-Copy-Item -LiteralPath $stepCommand.Source -Destination $stepExe -Force
-Copy-Item -LiteralPath $stepCaCommand.Source -Destination $stepCaExe -Force
+Copy-Item -LiteralPath $stepSource -Destination $stepExe -Force
+Copy-Item -LiteralPath $stepCaSource -Destination $stepCaExe -Force
 
 $stepCliVersionOutput = (& $stepExe version 2>&1 | Out-String)
 if ($LASTEXITCODE -ne 0 -or $stepCliVersionOutput -notmatch [regex]::Escape($StepCliVersion)) {
