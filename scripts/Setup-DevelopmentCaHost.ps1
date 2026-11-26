@@ -205,6 +205,7 @@ $serviceXmlPath = Join-Path $serviceDirectory 'StepCaDevelopment.xml'
 $winswPath = Join-Path $serviceDirectory 'StepCaDevelopment.exe'
 $stepExe = Join-Path $toolDirectory 'step.exe'
 $stepCaExe = Join-Path $toolDirectory 'step-ca.exe'
+$testProvisionerPasswordFile = Join-Path $env:TEMP ("step-test-provisioner-pass-{0}.txt" -f [guid]::NewGuid())
 
 $existingService = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
 if ($existingService) {
@@ -316,7 +317,6 @@ else {
     $provisionerPassword = Read-ConfirmedPassword -Prompt 'Set the development provisioner key passphrase (record it safely; its passphrase file will be temporary)'
     $rootPasswordFile = Join-Path $env:TEMP ("step-root-pass-{0}.txt" -f [guid]::NewGuid())
     $provisionerPasswordFile = Join-Path $env:TEMP ("step-provisioner-pass-{0}.txt" -f [guid]::NewGuid())
-    $testProvisionerPasswordFile = Join-Path $env:TEMP ("step-test-provisioner-pass-{0}.txt" -f [guid]::NewGuid())
 
     try {
         Write-PasswordFile -Path $rootPasswordFile -Password $rootPassword
