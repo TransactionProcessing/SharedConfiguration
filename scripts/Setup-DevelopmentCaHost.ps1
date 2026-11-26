@@ -49,6 +49,25 @@ function Assert-Administrator {
     }
 }
 
+function Invoke-NativeCommandQuietly {
+    param(
+        [Parameter(Mandatory)][string] $Executable,
+        [Parameter(Mandatory)][object[]] $Arguments
+    )
+
+    # Some CLIs write informational status to stderr. Do not let PowerShell's
+    # Stop preference turn that output into a terminating NativeCommandError.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $Executable @Arguments 2>&1 | Out-Null
+        return $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
+
 function Set-DirectoryAcl {
     param(
         [Parameter(Mandatory)][string] $Path,
@@ -235,19 +254,25 @@ function Test-ExistingCaIssuancePolicy {
             finally { Remove-Item -LiteralPath $ipCertificatePath, $ipKeyPath -Force -ErrorAction SilentlyContinue }
         }
 
-        & $StepExe ca certificate unauthorized.invalid $unauthorizedCertificatePath $unauthorizedKeyPath @commonArgs --san unauthorized.invalid --not-after=5m 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized.invalid.' }
+        $unauthorizedArgs = @('ca', 'certificate', 'unauthorized.invalid', $unauthorizedCertificatePath, $unauthorizedKeyPath) +
+            $commonArgs + @('--san', 'unauthorized.invalid', '--not-after=5m')
+        $unauthorizedExitCode = Invoke-NativeCommandQuietly -Executable $StepExe -Arguments $unauthorizedArgs
+        if ($unauthorizedExitCode -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized.invalid.' }
 
         $unauthorizedIpCertificatePath = Join-Path $env:TEMP ("step-ca-denied-ip-{0}.crt" -f [guid]::NewGuid())
         $unauthorizedIpKeyPath = Join-Path $env:TEMP ("step-ca-denied-ip-{0}.key" -f [guid]::NewGuid())
         try {
-            & $StepExe ca certificate localhost $unauthorizedIpCertificatePath $unauthorizedIpKeyPath @commonArgs --san '192.168.1.99' --not-after=5m 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
+            $unauthorizedIpArgs = @('ca', 'certificate', 'localhost', $unauthorizedIpCertificatePath, $unauthorizedIpKeyPath) +
+                $commonArgs + @('--san', '192.168.1.99', '--not-after=5m')
+            $unauthorizedIpExitCode = Invoke-NativeCommandQuietly -Executable $StepExe -Arguments $unauthorizedIpArgs
+            if ($unauthorizedIpExitCode -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
         }
         finally { Remove-Item -LiteralPath $unauthorizedIpCertificatePath, $unauthorizedIpKeyPath -Force -ErrorAction SilentlyContinue }
 
-        & $StepExe ca certificate localhost $longLivedCertificatePath $longLivedKeyPath @commonArgs --san localhost "--not-after=$($MaximumDuration)1h" 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { throw 'Duration policy test failed: existing CA issued a certificate beyond the configured maximum.' }
+        $longDurationArgs = @('ca', 'certificate', 'localhost', $longLivedCertificatePath, $longLivedKeyPath) +
+            $commonArgs + @('--san', 'localhost', "--not-after=$($MaximumDuration)1h")
+        $longDurationExitCode = Invoke-NativeCommandQuietly -Executable $StepExe -Arguments $longDurationArgs
+        if ($longDurationExitCode -eq 0) { throw 'Duration policy test failed: existing CA issued a certificate beyond the configured maximum.' }
         Write-Host 'Existing CA allowed the approved name and denied the unlisted name and excessive lifetime.'
     }
     finally {
@@ -843,8 +868,7 @@ try {
             '--san', $ipAddress,
             '--not-after=5m'
         )
-        & $stepExe @ipIssueArgs 2>&1 | Out-Null
-        $ipIssueExitCode = $LASTEXITCODE
+        $ipIssueExitCode = Invoke-NativeCommandQuietly -Executable $stepExe -Arguments $ipIssueArgs
         Remove-Item -LiteralPath $ipCertificatePath, $ipKeyPath -Force -ErrorAction SilentlyContinue
         if ($ipIssueExitCode -ne 0) { throw "Issuance policy test failed: CA did not issue for approved IP SAN $ipAddress." }
         Write-Host "Approved IP SAN was accepted: $ipAddress"
@@ -863,8 +887,8 @@ try {
             '--san', '192.168.1.99',
             '--not-after=5m'
         )
-        & $stepExe @unauthorizedIpArgs 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
+        $unauthorizedIpExitCode = Invoke-NativeCommandQuietly -Executable $stepExe -Arguments $unauthorizedIpArgs
+        if ($unauthorizedIpExitCode -eq 0) { throw 'Issuance policy test failed: CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
     }
     finally { Remove-Item -LiteralPath $unauthorizedIpCertificatePath, $unauthorizedIpKeyPath -Force -ErrorAction SilentlyContinue }
 
@@ -880,8 +904,7 @@ try {
         '--san', 'unauthorized.invalid',
         '--not-after=5m'
     )
-    & $stepExe @unauthorizedArgs 2>&1 | Out-Null
-    $unauthorizedExitCode = $LASTEXITCODE
+    $unauthorizedExitCode = Invoke-NativeCommandQuietly -Executable $stepExe -Arguments $unauthorizedArgs
     Remove-Item -LiteralPath $unauthorizedCertificatePath, $unauthorizedKeyPath -Force -ErrorAction SilentlyContinue
     if ($unauthorizedExitCode -eq 0) { throw 'Issuance policy test failed: CA issued a certificate for unauthorized.invalid.' }
     Write-Host 'Unauthorized SAN request was denied by the CA policy.'
@@ -898,8 +921,7 @@ try {
         '--san', 'localhost',
         "--not-after=$($MaximumCertificateDuration)1h"
     )
-    & $stepExe @longDurationArgs 2>&1 | Out-Null
-    $longDurationExitCode = $LASTEXITCODE
+    $longDurationExitCode = Invoke-NativeCommandQuietly -Executable $stepExe -Arguments $longDurationArgs
     Remove-Item -LiteralPath $longLivedCertificatePath, $longLivedKeyPath -Force -ErrorAction SilentlyContinue
     if ($longDurationExitCode -eq 0) { throw 'Duration policy test failed: CA accepted a certificate at the configured maximum; request a longer duration to validate the limit.' }
     Write-Host 'Certificate duration above the configured maximum was denied.'
