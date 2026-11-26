@@ -6,6 +6,10 @@ param(
 
     [Parameter()]
     [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string] $StepCliVersion,
+
+    [Parameter()]
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string] $WinSwVersion = '2.14.0',
 
     [Parameter()]
@@ -301,6 +305,8 @@ if (-not $StepCaVersion) {
     $StepCaVersion = Read-Host 'Enter the exact Smallstep.step-ca version to install (x.y.z)'
 }
 if ($StepCaVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Step CA version must be an exact x.y.z value.' }
+if (-not $StepCliVersion) { $StepCliVersion = $StepCaVersion }
+if ($StepCliVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Step CLI version must be an exact x.y.z value.' }
 
 if (-not $CaAddress) { $CaAddress = Read-Host 'Enter the CA DNS name or IPv4 address clients will use (without https:// or a port)' }
 $caEndpointIp = $null
@@ -448,25 +454,33 @@ Set-DirectoryAcl -Path $logsPath
 $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
 if (-not $winget) { throw 'WinGet is required for checksum-verified Smallstep installation. Install App Installer and rerun.' }
 
-Write-Host "Installing Smallstep.step-ca $StepCaVersion with WinGet (the package includes step and step-ca)."
+Write-Host "Installing Smallstep.step-ca $StepCaVersion with WinGet."
 & $winget.Source install --id Smallstep.step-ca --exact --version $StepCaVersion `
     --accept-source-agreements --accept-package-agreements --disable-interactivity
 if ($LASTEXITCODE -ne 0) { throw "WinGet failed with exit code $LASTEXITCODE." }
+Write-Host "Installing Smallstep.step $StepCliVersion with WinGet for the step CLI."
+& $winget.Source install --id Smallstep.step --exact --version $StepCliVersion `
+    --accept-source-agreements --accept-package-agreements --disable-interactivity
+if ($LASTEXITCODE -ne 0) { throw "WinGet failed to install the Step CLI with exit code $LASTEXITCODE." }
 
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $env:Path = @($machinePath, $userPath) -join ';'
-$stepCommand = Get-Command step.exe -ErrorAction Stop
-$stepCaCommand = Get-Command step-ca.exe -ErrorAction Stop
+$stepCommand = Get-Command step -CommandType Application -ErrorAction Stop
+$stepCaCommand = Get-Command step-ca -CommandType Application -ErrorAction Stop
 Copy-Item -LiteralPath $stepCommand.Source -Destination $stepExe -Force
 Copy-Item -LiteralPath $stepCaCommand.Source -Destination $stepCaExe -Force
 
+$stepCliVersionOutput = (& $stepExe version 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0 -or $stepCliVersionOutput -notmatch [regex]::Escape($StepCliVersion)) {
+    throw "Installed step CLI did not report requested version $StepCliVersion. Output: $stepCliVersionOutput"
+}
 $stepCaVersionOutput = (& $stepCaExe version 2>&1 | Out-String)
 if ($LASTEXITCODE -ne 0 -or $stepCaVersionOutput -notmatch [regex]::Escape($StepCaVersion)) {
     throw "Installed step-ca did not report requested version $StepCaVersion. Output: $stepCaVersionOutput"
 }
 Write-Host "Installed: $stepCaVersionOutput"
-Write-Host "step CLI: $(& $stepExe version)"
+Write-Host "Installed step CLI: $stepCliVersionOutput"
 
 Get-WinSwBinary -Version $WinSwVersion -Destination $winswPath
 
