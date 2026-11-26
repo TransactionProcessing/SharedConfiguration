@@ -44,4 +44,14 @@ Service crash recovery testing and a state-preserving uninstall/rollback procedu
 
 The CA's HTTPS listener, DNS issuance allow-list, ACME provisioner, certificate lifetimes, and network exposure caveat are documented in [Development CA issuance policy](docs/DevelopmentCa-Issuance-Policy.md).
 
-Run `scripts/Test-DevelopmentCa.ps1` on the CA host to check its HTTPS health and request/verify a temporary certificate for the development IP before upgrading an application service. The script removes its temporary certificate and key when it finishes.
+Run `scripts/Test-DevelopmentCa.ps1` on the development server before upgrading an application service. Copy the public `root_ca.crt` and `intermediate_ca.crt` from `C:\ProgramData\Smallstep\DevelopmentCA\certs` on the CA host to the development server, then run:
+
+```powershell
+.\scripts\Test-DevelopmentCa.ps1 `
+  -CaAddress '<CA server IPv4 address>' `
+  -RootCertificatePath 'C:\temp\root_ca.crt' `
+  -IntermediateCertificatePath 'C:\temp\intermediate_ca.crt' `
+  -TestIpAddress '192.168.1.86'
+```
+
+The script checks remote CA HTTPS health and requests/verifies a temporary certificate for the development IP. It installs the pinned Step CLI with WinGet if needed and removes the temporary certificate and key when it finishes. It does not modify Windows trust stores or application services.
