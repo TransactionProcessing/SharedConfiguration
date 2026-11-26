@@ -95,8 +95,19 @@ function Test-CaHealth {
     param([Parameter(Mandatory)][object] $ServiceInfo)
 
     $healthArgs = @('ca', 'health', '--ca-url', "https://localhost:$Port", '--root', $ServiceInfo.RootCertificate)
-    $null = & $ServiceInfo.StepExe @healthArgs 2>&1
-    return ($LASTEXITCODE -eq 0)
+    try {
+        $probeOutput = & $ServiceInfo.StepExe @healthArgs 2>&1
+        $probeExitCode = $LASTEXITCODE
+        if ($probeExitCode -ne 0) {
+            Write-Verbose "CA health probe failed with exit code $($probeExitCode): $($probeOutput -join [Environment]::NewLine)"
+            return $false
+        }
+        return $true
+    }
+    catch {
+        Write-Verbose "CA health probe is not ready yet: $_"
+        return $false
+    }
 }
 
 Assert-Administrator
@@ -159,25 +170,32 @@ if ((Read-Host 'Type CRASH to terminate only this step-ca.exe process and test s
 }
 
 $failedProcessId = [int]$stepCaProcess.ProcessId
-Stop-Process -Id $failedProcessId -Force
-$deadline = (Get-Date).AddSeconds($RecoveryTimeoutSeconds)
 $recovered = $false
 $recoveredProcessId = $null
+$recoveryCheckError = $null
 
-while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Seconds 2
-    $serviceInfo = Get-ServiceDetails -Name $serviceName
-    $currentDetails = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
-    if ($serviceInfo.Service.Status -eq 'Running' -and $currentDetails.ProcessId -gt 0) {
-        $processes = @(Get-CimInstance Win32_Process)
-        $currentStepCa = Get-StepCaChildProcess -WrapperProcessId ([int]$currentDetails.ProcessId) -ExpectedExecutable $serviceInfo.StepCaExe -Processes $processes
-        if ($currentStepCa -and [int]$currentStepCa.ProcessId -ne $failedProcessId -and
-            (Test-CaHealth -ServiceInfo $serviceInfo)) {
-            $recovered = $true
-            $recoveredProcessId = [int]$currentStepCa.ProcessId
-            break
+try {
+    Stop-Process -Id $failedProcessId -Force
+    $deadline = (Get-Date).AddSeconds($RecoveryTimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 2
+        $serviceInfo = Get-ServiceDetails -Name $serviceName
+        $currentDetails = Get-CimInstance Win32_Service -Filter "Name='$serviceName'"
+        if ($serviceInfo.Service.Status -eq 'Running' -and $currentDetails.ProcessId -gt 0) {
+            $processes = @(Get-CimInstance Win32_Process)
+            $currentStepCa = Get-StepCaChildProcess -WrapperProcessId ([int]$currentDetails.ProcessId) -ExpectedExecutable $serviceInfo.StepCaExe -Processes $processes
+            if ($currentStepCa -and [int]$currentStepCa.ProcessId -ne $failedProcessId -and
+                (Test-CaHealth -ServiceInfo $serviceInfo)) {
+                $recovered = $true
+                $recoveredProcessId = [int]$currentStepCa.ProcessId
+                break
+            }
         }
     }
+}
+catch {
+    $recoveryCheckError = $_
+    Write-Warning "Recovery monitoring hit an error; attempting service recovery: $recoveryCheckError"
 }
 
 if (-not $recovered) {
@@ -186,8 +204,10 @@ if (-not $recovered) {
         & $serviceInfo.WrapperPath restart
         if ($LASTEXITCODE -ne 0) { Write-Warning 'The fallback WinSW restart command failed.' }
     }
-    catch { Write-Warning "Could not start the CA service after the failed recovery test: $_" }
-    throw "Recovery test failed. Check WinSW and CA logs under $(Join-Path $DataRoot 'logs')."
+    catch { Write-Warning "Could not restart the CA service after the failed recovery test: $_" }
+    $failureMessage = "Recovery test failed. Check WinSW and CA logs under $(Join-Path $DataRoot 'logs')."
+    if ($recoveryCheckError) { $failureMessage += " Recovery check error: $recoveryCheckError" }
+    throw $failureMessage
 }
 
 Write-Host "Recovery verified: step-ca.exe restarted as process $recoveredProcessId and the CA health check passed."
