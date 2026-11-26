@@ -43,3 +43,5 @@ The development step-ca recovery procedure is documented in [Development CA reco
 Service crash recovery testing and a state-preserving uninstall/rollback procedure are documented in [Development CA service operations](docs/DevelopmentCa-Service-Operations.md).
 
 The CA's HTTPS listener, DNS issuance allow-list, ACME provisioner, certificate lifetimes, and network exposure caveat are documented in [Development CA issuance policy](docs/DevelopmentCa-Issuance-Policy.md).
+
+Run `scripts/Test-DevelopmentCa.ps1` on the CA host to check its HTTPS health and request/verify a temporary certificate for the development IP before upgrading an application service. The script removes its temporary certificate and key when it finishes.
