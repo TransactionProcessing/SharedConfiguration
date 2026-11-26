@@ -51,14 +51,11 @@ function Get-ServiceDetails {
 
     $serviceXml = [xml](Get-Content -LiteralPath $xmlPath -Raw)
     $stepCaExe = $serviceXml.service.executable.Trim()
-    if ([IO.Path]::GetFileName($stepCaExe) -ine 'step-ca.exe' -or -not (Test-Path -LiteralPath $stepCaExe)) {
-        throw "The service XML does not point to an existing step-ca.exe: $stepCaExe"
+    if ([IO.Path]::GetFileName($stepCaExe) -ine 'step-ca.exe') {
+        throw "The service XML does not point to step-ca.exe: $stepCaExe"
     }
     $stepExe = Join-Path (Split-Path -Parent $stepCaExe) 'step.exe'
     $rootCertificate = Join-Path $DataRoot 'certs\root_ca.crt'
-    if (-not (Test-Path -LiteralPath $stepExe) -or -not (Test-Path -LiteralPath $rootCertificate)) {
-        throw 'The step CLI or CA root certificate is missing; cannot validate service recovery.'
-    }
 
     return [pscustomobject]@{
         Service = $service
@@ -139,6 +136,11 @@ if ($Action -eq 'Uninstall') {
 if ($serviceInfo.Service.Status -ne 'Running') {
     throw "CA service must be running before the recovery test; current status is $($serviceInfo.Service.Status)."
 }
+if (-not (Test-Path -LiteralPath $serviceInfo.StepCaExe) -or
+    -not (Test-Path -LiteralPath $serviceInfo.StepExe) -or
+    -not (Test-Path -LiteralPath $serviceInfo.RootCertificate)) {
+    throw 'The step-ca binary, step CLI, or CA root certificate is missing; cannot validate service recovery.'
+}
 if (-not (Test-CaHealth -ServiceInfo $serviceInfo)) {
     throw 'The CA health check failed before the recovery test. Fix the existing issue before testing recovery.'
 }
@@ -181,11 +183,8 @@ while ((Get-Date) -lt $deadline) {
 if (-not $recovered) {
     Write-Warning "Automatic recovery was not verified within $RecoveryTimeoutSeconds seconds."
     try {
-        $currentService = Get-Service -Name $serviceName
-        if ($currentService.Status -ne 'Running') {
-            & $serviceInfo.WrapperPath start
-            if ($LASTEXITCODE -ne 0) { Write-Warning 'The fallback WinSW start command failed.' }
-        }
+        & $serviceInfo.WrapperPath restart
+        if ($LASTEXITCODE -ne 0) { Write-Warning 'The fallback WinSW restart command failed.' }
     }
     catch { Write-Warning "Could not start the CA service after the failed recovery test: $_" }
     throw "Recovery test failed. Check WinSW and CA logs under $(Join-Path $DataRoot 'logs')."
