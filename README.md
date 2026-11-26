@@ -43,3 +43,15 @@ The development step-ca recovery procedure is documented in [Development CA reco
 Service crash recovery testing and a state-preserving uninstall/rollback procedure are documented in [Development CA service operations](docs/DevelopmentCa-Service-Operations.md).
 
 The CA's HTTPS listener, DNS issuance allow-list, ACME provisioner, certificate lifetimes, and network exposure caveat are documented in [Development CA issuance policy](docs/DevelopmentCa-Issuance-Policy.md).
+
+Run `scripts/Test-DevelopmentCa.ps1` on the development server before upgrading an application service. Copy the public `root_ca.crt` and `intermediate_ca.crt` from `C:\ProgramData\Smallstep\DevelopmentCA\certs` on the CA host to the development server, then run:
+
+```powershell
+.\scripts\Test-DevelopmentCa.ps1 `
+  -CaAddress '<CA server IPv4 address>' `
+  -RootCertificatePath 'C:\temp\root_ca.crt' `
+  -IntermediateCertificatePath 'C:\temp\intermediate_ca.crt' `
+  -TestIpAddress '192.168.1.86'
+```
+
+The script checks remote CA HTTPS health and requests/verifies a temporary certificate for the development IP. It downloads the pinned Step CLI release into a temporary folder, verifies its SHA-256 checksum, and removes the CLI, temporary certificate, and key when it finishes. It does not modify Windows trust stores or application services. Pass `-StepExePath` to use an existing CLI instead of downloading one.

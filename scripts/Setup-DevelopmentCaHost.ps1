@@ -6,6 +6,10 @@ param(
 
     [Parameter()]
     [ValidatePattern('^\d+\.\d+\.\d+$')]
+    [string] $StepCliVersion,
+
+    [Parameter()]
+    [ValidatePattern('^\d+\.\d+\.\d+$')]
     [string] $WinSwVersion = '2.14.0',
 
     [Parameter()]
@@ -42,6 +46,25 @@ function Assert-Administrator {
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         throw 'Run this script from an elevated PowerShell session.'
+    }
+}
+
+function Invoke-NativeCommandQuietly {
+    param(
+        [Parameter(Mandatory)][string] $Executable,
+        [Parameter(Mandatory)][object[]] $Arguments
+    )
+
+    # Some CLIs write informational status to stderr. Do not let PowerShell's
+    # Stop preference turn that output into a terminating NativeCommandError.
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $Executable @Arguments 2>&1 | Out-Null
+        return $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
     }
 }
 
@@ -231,19 +254,25 @@ function Test-ExistingCaIssuancePolicy {
             finally { Remove-Item -LiteralPath $ipCertificatePath, $ipKeyPath -Force -ErrorAction SilentlyContinue }
         }
 
-        & $StepExe ca certificate unauthorized.invalid $unauthorizedCertificatePath $unauthorizedKeyPath @commonArgs --san unauthorized.invalid --not-after=5m 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized.invalid.' }
+        $unauthorizedArgs = @('ca', 'certificate', 'unauthorized.invalid', $unauthorizedCertificatePath, $unauthorizedKeyPath) +
+            $commonArgs + @('--san', 'unauthorized.invalid', '--not-after=5m')
+        $unauthorizedExitCode = Invoke-NativeCommandQuietly -Executable $StepExe -Arguments $unauthorizedArgs
+        if ($unauthorizedExitCode -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized.invalid.' }
 
         $unauthorizedIpCertificatePath = Join-Path $env:TEMP ("step-ca-denied-ip-{0}.crt" -f [guid]::NewGuid())
         $unauthorizedIpKeyPath = Join-Path $env:TEMP ("step-ca-denied-ip-{0}.key" -f [guid]::NewGuid())
         try {
-            & $StepExe ca certificate localhost $unauthorizedIpCertificatePath $unauthorizedIpKeyPath @commonArgs --san '192.168.1.99' --not-after=5m 2>&1 | Out-Null
-            if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
+            $unauthorizedIpArgs = @('ca', 'certificate', 'localhost', $unauthorizedIpCertificatePath, $unauthorizedIpKeyPath) +
+                $commonArgs + @('--san', '192.168.1.99', '--not-after=5m')
+            $unauthorizedIpExitCode = Invoke-NativeCommandQuietly -Executable $StepExe -Arguments $unauthorizedIpArgs
+            if ($unauthorizedIpExitCode -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
         }
         finally { Remove-Item -LiteralPath $unauthorizedIpCertificatePath, $unauthorizedIpKeyPath -Force -ErrorAction SilentlyContinue }
 
-        & $StepExe ca certificate localhost $longLivedCertificatePath $longLivedKeyPath @commonArgs --san localhost "--not-after=$($MaximumDuration)1h" 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { throw 'Duration policy test failed: existing CA issued a certificate beyond the configured maximum.' }
+        $longDurationArgs = @('ca', 'certificate', 'localhost', $longLivedCertificatePath, $longLivedKeyPath) +
+            $commonArgs + @('--san', 'localhost', "--not-after=$($MaximumDuration)1h")
+        $longDurationExitCode = Invoke-NativeCommandQuietly -Executable $StepExe -Arguments $longDurationArgs
+        if ($longDurationExitCode -eq 0) { throw 'Duration policy test failed: existing CA issued a certificate beyond the configured maximum.' }
         Write-Host 'Existing CA allowed the approved name and denied the unlisted name and excessive lifetime.'
     }
     finally {
@@ -301,6 +330,8 @@ if (-not $StepCaVersion) {
     $StepCaVersion = Read-Host 'Enter the exact Smallstep.step-ca version to install (x.y.z)'
 }
 if ($StepCaVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Step CA version must be an exact x.y.z value.' }
+if (-not $StepCliVersion) { $StepCliVersion = $StepCaVersion }
+if ($StepCliVersion -notmatch '^\d+\.\d+\.\d+$') { throw 'Step CLI version must be an exact x.y.z value.' }
 
 if (-not $CaAddress) { $CaAddress = Read-Host 'Enter the CA DNS name or IPv4 address clients will use (without https:// or a port)' }
 $caEndpointIp = $null
@@ -432,41 +463,129 @@ if ($existingService) {
 if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue) {
     throw "Port $Port is already listening. Choose a free port before setting up the CA."
 }
-if ((Test-Path -LiteralPath $DataRoot) -and -not (Test-Path -LiteralPath $caConfigPath) -and
-    @(Get-ChildItem -LiteralPath $DataRoot -Force -ErrorAction SilentlyContinue).Count -gt 0) {
-    throw "$DataRoot is not empty but has no CA configuration. Review its contents before rerunning; the script will not overwrite partial setup data."
+if ((Test-Path -LiteralPath $DataRoot) -and -not (Test-Path -LiteralPath $caConfigPath)) {
+    $allowedScaffoldDirectories = @(
+        (Join-Path $DataRoot 'certs'),
+        (Join-Path $DataRoot 'config'),
+        (Join-Path $DataRoot 'secrets'),
+        $logsPath
+    ) | ForEach-Object { [IO.Path]::GetFullPath($_) }
+    $existingDataItems = @(Get-ChildItem -LiteralPath $DataRoot -Force -Recurse -ErrorAction Stop)
+    $unexpectedDataItems = @($existingDataItems | Where-Object {
+        -not $_.PSIsContainer -or $allowedScaffoldDirectories -notcontains [IO.Path]::GetFullPath($_.FullName)
+    })
+    if ($unexpectedDataItems.Count -gt 0) {
+        throw "$DataRoot contains files or unexpected directories but has no CA configuration. Review its contents before rerunning; the script will not overwrite partial setup data. Unexpected entries: $($unexpectedDataItems.FullName -join ', ')"
+    }
+    if ($existingDataItems.Count -gt 0) {
+        Write-Host "Found only empty setup directories in $DataRoot from an earlier failed attempt; safe to reuse."
+    }
 }
-
-New-Item -ItemType Directory -Path $DataRoot, (Join-Path $DataRoot 'certs'), (Join-Path $DataRoot 'config'), `
-    (Join-Path $DataRoot 'secrets'), $logsPath, $toolDirectory, $serviceDirectory -Force | Out-Null
-Set-DirectoryAcl -Path $DataRoot
-Set-DirectoryAcl -Path (Join-Path $DataRoot 'certs')
-Set-DirectoryAcl -Path (Join-Path $DataRoot 'config')
-Set-DirectoryAcl -Path (Join-Path $DataRoot 'secrets')
-Set-DirectoryAcl -Path $logsPath
 
 $winget = Get-Command winget.exe -ErrorAction SilentlyContinue
 if (-not $winget) { throw 'WinGet is required for checksum-verified Smallstep installation. Install App Installer and rerun.' }
 
-Write-Host "Installing Smallstep.step-ca $StepCaVersion with WinGet (the package includes step and step-ca)."
-& $winget.Source install --id Smallstep.step-ca --exact --version $StepCaVersion `
-    --accept-source-agreements --accept-package-agreements --disable-interactivity
-if ($LASTEXITCODE -ne 0) { throw "WinGet failed with exit code $LASTEXITCODE." }
+function Refresh-ProcessPath {
+    $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $wingetLinksPath = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Links'
+    $env:Path = @($machinePath, $userPath, $wingetLinksPath) -join ';'
+}
 
-$machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
-$userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-$env:Path = @($machinePath, $userPath) -join ';'
-$stepCommand = Get-Command step.exe -ErrorAction Stop
-$stepCaCommand = Get-Command step-ca.exe -ErrorAction Stop
-Copy-Item -LiteralPath $stepCommand.Source -Destination $stepExe -Force
-Copy-Item -LiteralPath $stepCaCommand.Source -Destination $stepCaExe -Force
+function Get-InstalledSmallstepExecutable {
+    param(
+        [Parameter(Mandatory)][string] $PackageId,
+        [Parameter(Mandatory)][string] $CommandName,
+        [Parameter(Mandatory)][string] $RelativeExecutablePath,
+        [Parameter(Mandatory)][string] $ExpectedVersion
+    )
 
+    $packageDirectories = @()
+    foreach ($packagesRoot in @(
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'),
+        (Join-Path $env:ProgramFiles 'WinGet\Packages')
+    )) {
+        if (Test-Path -LiteralPath $packagesRoot -PathType Container) {
+            $packageDirectories += @(Get-ChildItem -LiteralPath $packagesRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "$($PackageId)_*" })
+        }
+    }
+
+    foreach ($packageDirectory in $packageDirectories) {
+        $executablePath = Join-Path $packageDirectory.FullName $RelativeExecutablePath
+        if (-not (Test-Path -LiteralPath $executablePath -PathType Leaf)) { continue }
+        $versionOutput = (& $executablePath version 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($ExpectedVersion)) {
+            throw "$CommandName at '$executablePath' did not report requested version $ExpectedVersion. Output: $versionOutput"
+        }
+        return $executablePath
+    }
+
+    $command = Get-Command $CommandName -CommandType Application -ErrorAction SilentlyContinue
+    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+        $versionOutput = (& $command.Source version 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($ExpectedVersion)) {
+            throw "$CommandName at '$($command.Source)' did not report requested version $ExpectedVersion. Output: $versionOutput"
+        }
+        return $command.Source
+    }
+    return $null
+}
+
+function Ensure-SmallstepPackage {
+    param(
+        [Parameter(Mandatory)][string] $PackageId,
+        [Parameter(Mandatory)][string] $Version,
+        [Parameter(Mandatory)][string] $CommandName,
+        [Parameter(Mandatory)][string] $RelativeExecutablePath
+    )
+
+    Refresh-ProcessPath
+    $installedExecutable = Get-InstalledSmallstepExecutable -PackageId $PackageId -CommandName $CommandName `
+        -RelativeExecutablePath $RelativeExecutablePath -ExpectedVersion $Version
+    if ($installedExecutable) {
+        Write-Host "$PackageId $Version is already installed; reusing $installedExecutable."
+        return $installedExecutable
+    }
+
+    Write-Host "Installing $PackageId $Version with WinGet."
+    & $winget.Source install --id $PackageId --exact --version $Version `
+        --accept-source-agreements --accept-package-agreements --disable-interactivity
+    if ($LASTEXITCODE -ne 0) { throw "WinGet failed to install $PackageId $Version with exit code $LASTEXITCODE." }
+
+    Refresh-ProcessPath
+    $installedExecutable = Get-InstalledSmallstepExecutable -PackageId $PackageId -CommandName $CommandName `
+        -RelativeExecutablePath $RelativeExecutablePath -ExpectedVersion $Version
+    if (-not $installedExecutable) { throw "WinGet installed $PackageId, but the $CommandName executable was not found in its package directory or on PATH." }
+    return $installedExecutable
+}
+
+$stepSource = Ensure-SmallstepPackage -PackageId 'Smallstep.step' -Version $StepCliVersion `
+    -CommandName 'step' -RelativeExecutablePath "step_$StepCliVersion\bin\step.exe"
+$stepCaSource = Ensure-SmallstepPackage -PackageId 'Smallstep.step-ca' -Version $StepCaVersion `
+    -CommandName 'step-ca' -RelativeExecutablePath 'step-ca.exe'
+New-Item -ItemType Directory -Path $toolDirectory -Force | Out-Null
+Copy-Item -LiteralPath $stepSource -Destination $stepExe -Force
+Copy-Item -LiteralPath $stepCaSource -Destination $stepCaExe -Force
+
+$stepCliVersionOutput = (& $stepExe version 2>&1 | Out-String)
+if ($LASTEXITCODE -ne 0 -or $stepCliVersionOutput -notmatch [regex]::Escape($StepCliVersion)) {
+    throw "Installed step CLI did not report requested version $StepCliVersion. Output: $stepCliVersionOutput"
+}
 $stepCaVersionOutput = (& $stepCaExe version 2>&1 | Out-String)
 if ($LASTEXITCODE -ne 0 -or $stepCaVersionOutput -notmatch [regex]::Escape($StepCaVersion)) {
     throw "Installed step-ca did not report requested version $StepCaVersion. Output: $stepCaVersionOutput"
 }
 Write-Host "Installed: $stepCaVersionOutput"
-Write-Host "step CLI: $(& $stepExe version)"
+Write-Host "Installed step CLI: $stepCliVersionOutput"
+
+New-Item -ItemType Directory -Path $DataRoot, (Join-Path $DataRoot 'certs'), (Join-Path $DataRoot 'config'), `
+    (Join-Path $DataRoot 'secrets'), $logsPath, $serviceDirectory -Force | Out-Null
+Set-DirectoryAcl -Path $DataRoot
+Set-DirectoryAcl -Path (Join-Path $DataRoot 'certs')
+Set-DirectoryAcl -Path (Join-Path $DataRoot 'config')
+Set-DirectoryAcl -Path (Join-Path $DataRoot 'secrets')
+Set-DirectoryAcl -Path $logsPath
 
 Get-WinSwBinary -Version $WinSwVersion -Destination $winswPath
 
@@ -664,10 +783,10 @@ $xml = @"
   <log mode="roll" />
   <onfailure action="restart" delay="10 sec" />
   <onfailure action="restart" delay="30 sec" />
+  <!-- WinSW must not pre-grant the service-logon right for this virtual account; it is not resolvable until SCM creates the service. -->
   <serviceaccount>
     <domain>NT SERVICE</domain>
     <user>$serviceName</user>
-    <allowservicelogon>true</allowservicelogon>
   </serviceaccount>
 </service>
 "@
@@ -749,8 +868,7 @@ try {
             '--san', $ipAddress,
             '--not-after=5m'
         )
-        & $stepExe @ipIssueArgs 2>&1 | Out-Null
-        $ipIssueExitCode = $LASTEXITCODE
+        $ipIssueExitCode = Invoke-NativeCommandQuietly -Executable $stepExe -Arguments $ipIssueArgs
         Remove-Item -LiteralPath $ipCertificatePath, $ipKeyPath -Force -ErrorAction SilentlyContinue
         if ($ipIssueExitCode -ne 0) { throw "Issuance policy test failed: CA did not issue for approved IP SAN $ipAddress." }
         Write-Host "Approved IP SAN was accepted: $ipAddress"
@@ -769,8 +887,8 @@ try {
             '--san', '192.168.1.99',
             '--not-after=5m'
         )
-        & $stepExe @unauthorizedIpArgs 2>&1 | Out-Null
-        if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
+        $unauthorizedIpExitCode = Invoke-NativeCommandQuietly -Executable $stepExe -Arguments $unauthorizedIpArgs
+        if ($unauthorizedIpExitCode -eq 0) { throw 'Issuance policy test failed: CA issued a certificate for unauthorized IP SAN 192.168.1.99.' }
     }
     finally { Remove-Item -LiteralPath $unauthorizedIpCertificatePath, $unauthorizedIpKeyPath -Force -ErrorAction SilentlyContinue }
 
@@ -786,8 +904,7 @@ try {
         '--san', 'unauthorized.invalid',
         '--not-after=5m'
     )
-    & $stepExe @unauthorizedArgs 2>&1 | Out-Null
-    $unauthorizedExitCode = $LASTEXITCODE
+    $unauthorizedExitCode = Invoke-NativeCommandQuietly -Executable $stepExe -Arguments $unauthorizedArgs
     Remove-Item -LiteralPath $unauthorizedCertificatePath, $unauthorizedKeyPath -Force -ErrorAction SilentlyContinue
     if ($unauthorizedExitCode -eq 0) { throw 'Issuance policy test failed: CA issued a certificate for unauthorized.invalid.' }
     Write-Host 'Unauthorized SAN request was denied by the CA policy.'
@@ -804,8 +921,7 @@ try {
         '--san', 'localhost',
         "--not-after=$($MaximumCertificateDuration)1h"
     )
-    & $stepExe @longDurationArgs 2>&1 | Out-Null
-    $longDurationExitCode = $LASTEXITCODE
+    $longDurationExitCode = Invoke-NativeCommandQuietly -Executable $stepExe -Arguments $longDurationArgs
     Remove-Item -LiteralPath $longLivedCertificatePath, $longLivedKeyPath -Force -ErrorAction SilentlyContinue
     if ($longDurationExitCode -eq 0) { throw 'Duration policy test failed: CA accepted a certificate at the configured maximum; request a longer duration to validate the limit.' }
     Write-Host 'Certificate duration above the configured maximum was denied.'

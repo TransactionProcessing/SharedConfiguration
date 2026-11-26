@@ -15,6 +15,8 @@ Use `-CaAddress` to set the CA endpoint to either a DNS name or an IPv4 address.
   -Port 8000
 ```
 
+The setup installs both `Smallstep.step-ca` and the separate `Smallstep.step` CLI package. By default, `-StepCliVersion` matches `-StepCaVersion`; set it explicitly only when you need a different CLI version.
+
 When clients will connect by IP address, the issued certificate must contain an IP SAN matching that address. To authorize additional server IPs, use `-AllowedIpAddresses`; to add DNS aliases, use `-AllowedDnsNames`:
 
 ```powershell
