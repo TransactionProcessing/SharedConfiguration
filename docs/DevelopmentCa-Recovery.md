@@ -93,7 +93,7 @@ Do not delete or overwrite an older known-good backup until the new backup has b
    if ($LASTEXITCODE -ne 0) { throw 'Could not restrict the CA passphrase file.' }
    ```
 
-5. Re-run `Setup-DevelopmentCaHost.ps1` with the same step-ca version, DNS name, port, and `DataRoot`. Its existing-data path reapplies the service ACLs, starts the service, and runs the CA health check. Confirm the service is running and health succeeds before returning the CA to use.
+5. Re-run `Setup-DevelopmentCaHost.ps1` with the same step-ca version, CA address (DNS name or IP), port, and `DataRoot`. Its existing-data path reapplies the service ACLs, starts the service, and checks CA health using both localhost and the configured endpoint. Confirm both health checks succeed before returning the CA to use.
 6. Issue a short-lived test leaf certificate and verify it against the restored root. The command prompts for the provisioner password and the temporary leaf-key password:
 
    ```powershell
