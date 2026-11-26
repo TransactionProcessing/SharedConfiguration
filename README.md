@@ -54,4 +54,4 @@ Run `scripts/Test-DevelopmentCa.ps1` on the development server before upgrading 
   -TestIpAddress '192.168.1.86'
 ```
 
-The script checks remote CA HTTPS health and requests/verifies a temporary certificate for the development IP. It installs the pinned Step CLI with WinGet if needed and removes the temporary certificate and key when it finishes. It does not modify Windows trust stores or application services.
+The script checks remote CA HTTPS health and requests/verifies a temporary certificate for the development IP. It downloads the pinned Step CLI release into a temporary folder, verifies its SHA-256 checksum, and removes the CLI, temporary certificate, and key when it finishes. It does not modify Windows trust stores or application services. Pass `-StepExePath` to use an existing CLI instead of downloading one.
