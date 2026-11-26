@@ -66,9 +66,18 @@ function Get-StepCliPath {
     }
 
     Write-Host "Installing Smallstep.step $Version with WinGet..."
-    & $winget.Source install --id Smallstep.step --exact --version $Version `
-        --accept-source-agreements --accept-package-agreements --disable-interactivity
-    if ($LASTEXITCODE -ne 0) { throw "WinGet failed to install Smallstep.step $Version (exit $LASTEXITCODE)." }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $wingetOutput = @(& $winget.Source install --id Smallstep.step --exact --version $Version `
+            --accept-source-agreements --accept-package-agreements --disable-interactivity 2>&1)
+        $wingetExitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    $wingetOutput | ForEach-Object { Write-Host $_ }
+    if ($wingetExitCode -ne 0) { throw "WinGet failed to install Smallstep.step $Version (exit $wingetExitCode)." }
 
     foreach ($packagesRoot in $packagesRootPaths) {
         if (-not (Test-Path -LiteralPath $packagesRoot -PathType Container)) { continue }
@@ -101,6 +110,7 @@ foreach ($requiredPath in @($RootCertificatePath, $IntermediateCertificatePath))
 }
 
 $stepExe = Get-StepCliPath -Version $StepCliVersion -ExplicitPath $StepExePath
+Write-Host "Using Step CLI at $stepExe"
 $versionOutput = (& $stepExe version 2>&1 | Out-String)
 if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($StepCliVersion)) {
     throw "The step CLI at '$stepExe' did not report version $StepCliVersion. Output: $versionOutput"
