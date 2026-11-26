@@ -467,34 +467,60 @@ function Refresh-ProcessPath {
     $env:Path = @($machinePath, $userPath, $wingetLinksPath) -join ';'
 }
 
-function Get-InstalledSmallstepCommand {
+function Get-InstalledSmallstepExecutable {
     param(
+        [Parameter(Mandatory)][string] $PackageId,
         [Parameter(Mandatory)][string] $CommandName,
+        [Parameter(Mandatory)][string] $RelativeExecutablePath,
         [Parameter(Mandatory)][string] $ExpectedVersion
     )
 
-    $command = Get-Command $CommandName -CommandType Application -ErrorAction SilentlyContinue
-    if (-not $command) { return $null }
-
-    $versionOutput = (& $command.Source version 2>&1 | Out-String)
-    if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($ExpectedVersion)) {
-        throw "$CommandName is already available at '$($command.Source)' but did not report requested version $ExpectedVersion. Output: $versionOutput"
+    $packageDirectories = @()
+    foreach ($packagesRoot in @(
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'),
+        (Join-Path $env:ProgramFiles 'WinGet\Packages')
+    )) {
+        if (Test-Path -LiteralPath $packagesRoot -PathType Container) {
+            $packageDirectories += @(Get-ChildItem -LiteralPath $packagesRoot -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "$($PackageId)_*" })
+        }
     }
-    return $command.Source
+
+    foreach ($packageDirectory in $packageDirectories) {
+        $executablePath = Join-Path $packageDirectory.FullName $RelativeExecutablePath
+        if (-not (Test-Path -LiteralPath $executablePath -PathType Leaf)) { continue }
+        $versionOutput = (& $executablePath version 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($ExpectedVersion)) {
+            throw "$CommandName at '$executablePath' did not report requested version $ExpectedVersion. Output: $versionOutput"
+        }
+        return $executablePath
+    }
+
+    $command = Get-Command $CommandName -CommandType Application -ErrorAction SilentlyContinue
+    if ($command -and (Test-Path -LiteralPath $command.Source -PathType Leaf)) {
+        $versionOutput = (& $command.Source version 2>&1 | Out-String)
+        if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($ExpectedVersion)) {
+            throw "$CommandName at '$($command.Source)' did not report requested version $ExpectedVersion. Output: $versionOutput"
+        }
+        return $command.Source
+    }
+    return $null
 }
 
 function Ensure-SmallstepPackage {
     param(
         [Parameter(Mandatory)][string] $PackageId,
         [Parameter(Mandatory)][string] $Version,
-        [Parameter(Mandatory)][string] $CommandName
+        [Parameter(Mandatory)][string] $CommandName,
+        [Parameter(Mandatory)][string] $RelativeExecutablePath
     )
 
     Refresh-ProcessPath
-    $installedCommand = Get-InstalledSmallstepCommand -CommandName $CommandName -ExpectedVersion $Version
-    if ($installedCommand) {
-        Write-Host "$PackageId $Version is already installed; reusing $installedCommand."
-        return $installedCommand
+    $installedExecutable = Get-InstalledSmallstepExecutable -PackageId $PackageId -CommandName $CommandName `
+        -RelativeExecutablePath $RelativeExecutablePath -ExpectedVersion $Version
+    if ($installedExecutable) {
+        Write-Host "$PackageId $Version is already installed; reusing $installedExecutable."
+        return $installedExecutable
     }
 
     Write-Host "Installing $PackageId $Version with WinGet."
@@ -503,13 +529,16 @@ function Ensure-SmallstepPackage {
     if ($LASTEXITCODE -ne 0) { throw "WinGet failed to install $PackageId $Version with exit code $LASTEXITCODE." }
 
     Refresh-ProcessPath
-    $installedCommand = Get-InstalledSmallstepCommand -CommandName $CommandName -ExpectedVersion $Version
-    if (-not $installedCommand) { throw "WinGet installed $PackageId, but the '$CommandName' command was not found on PATH. Restart elevated PowerShell and rerun setup." }
-    return $installedCommand
+    $installedExecutable = Get-InstalledSmallstepExecutable -PackageId $PackageId -CommandName $CommandName `
+        -RelativeExecutablePath $RelativeExecutablePath -ExpectedVersion $Version
+    if (-not $installedExecutable) { throw "WinGet installed $PackageId, but the $CommandName executable was not found in its package directory or on PATH." }
+    return $installedExecutable
 }
 
-$stepSource = Ensure-SmallstepPackage -PackageId 'Smallstep.step' -Version $StepCliVersion -CommandName 'step'
-$stepCaSource = Ensure-SmallstepPackage -PackageId 'Smallstep.step-ca' -Version $StepCaVersion -CommandName 'step-ca'
+$stepSource = Ensure-SmallstepPackage -PackageId 'Smallstep.step' -Version $StepCliVersion `
+    -CommandName 'step' -RelativeExecutablePath "step_$StepCliVersion\bin\step.exe"
+$stepCaSource = Ensure-SmallstepPackage -PackageId 'Smallstep.step-ca' -Version $StepCaVersion `
+    -CommandName 'step-ca' -RelativeExecutablePath 'step-ca.exe'
 New-Item -ItemType Directory -Path $toolDirectory -Force | Out-Null
 Copy-Item -LiteralPath $stepSource -Destination $stepExe -Force
 Copy-Item -LiteralPath $stepCaSource -Destination $stepCaExe -Force
