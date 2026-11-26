@@ -36,8 +36,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Could not restrict backup folder permissions.' }
 
     $manifestPath = Join-Path $backupPath 'backup-manifest.csv'
-    Get-ChildItem -LiteralPath $backupPath -File -Recurse |
-        Get-FileHash -Algorithm SHA256 |
+    $fileHashes = @(Get-ChildItem -LiteralPath $backupPath -File -Recurse |
+        Get-FileHash -Algorithm SHA256)
+    $fileHashes |
         Select-Object Hash, @{ Name = 'RelativePath'; Expression = { $_.Path.Substring($backupPath.Length).TrimStart('\') } } |
         Export-Csv -LiteralPath $manifestPath -NoTypeInformation
 }
@@ -98,6 +99,7 @@ Do not delete or overwrite an older known-good backup until the new backup has b
    ```powershell
    $stepExe = Join-Path $env:ProgramFiles 'Smallstep\step-ca\<STEP_CA_VERSION>\step.exe'
    $dataRoot = Join-Path $env:ProgramData 'Smallstep\DevelopmentCA'
+   $stepCaPort = 8000 # Use the same value passed to -Port during setup; 8000 is the default.
    $testRoot = Join-Path $env:TEMP ("step-ca-recovery-{0}" -f [guid]::NewGuid())
    $rootCertificate = Join-Path $dataRoot 'certs\root_ca.crt'
    $intermediateCertificate = Join-Path $dataRoot 'certs\intermediate_ca.crt'
@@ -108,7 +110,7 @@ Do not delete or overwrite an older known-good backup until the new backup has b
 
    try {
        & $stepExe ca certificate 'ca-recovery-check' $testCertificate $testKey `
-           --provisioner dev-admin --ca-url 'https://localhost:8000' `
+           --provisioner dev-admin --ca-url "https://localhost:$stepCaPort" `
            --root $rootCertificate --san localhost --not-after=5m
        if ($LASTEXITCODE -ne 0) { throw 'Test certificate issuance failed.' }
 
