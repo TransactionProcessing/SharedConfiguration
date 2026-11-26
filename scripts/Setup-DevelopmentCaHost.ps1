@@ -422,13 +422,6 @@ if ($existingService) {
     if ($LASTEXITCODE -ne 0) { throw "Existing CA health check failed. Check $logsPath." }
     & $stepExe ca health --ca-url $caUrl --root $rootCertificatePath
     if ($LASTEXITCODE -ne 0) { throw "Existing CA health check failed using configured endpoint $caUrl. Check the CA TLS names and $logsPath." }
-    $defaultsPath = Join-Path $DataRoot 'config\defaults.json'
-    if (Test-Path -LiteralPath $defaultsPath) {
-        $defaults = Get-Content -LiteralPath $defaultsPath -Raw | ConvertFrom-Json
-        $defaults.'ca-url' = $caUrl
-        Write-JsonFile -Path $defaultsPath -Value $defaults
-    }
-
     Test-ExistingCaIssuancePolicy -StepExe $stepExe -CaPasswordFile $passwordFilePath `
         -CaUrl "https://localhost:$Port" -RootCertificate $rootCertificatePath `
         -AllowedIpAddresses $effectiveAllowedIpAddresses -MaximumDuration $MaximumCertificateDuration
@@ -638,14 +631,6 @@ else {
         }
     }
     Write-JsonFile -Path $caConfigPath -Value $caConfig
-    $defaultsPath = Join-Path $DataRoot 'config\defaults.json'
-    if (Test-Path -LiteralPath $defaultsPath) {
-        $defaults = Get-Content -LiteralPath $defaultsPath -Raw | ConvertFrom-Json
-        $defaults.root = $rootCertificatePath
-        $defaults.'ca-url' = $caUrl
-        Write-JsonFile -Path $defaultsPath -Value $defaults
-    }
-
     & icacls.exe $passwordFilePath /inheritance:r /grant:r `
         '*S-1-5-18:F' '*S-1-5-32-544:F' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'Could not restrict permissions on the CA passphrase file.' }
@@ -658,6 +643,13 @@ $caConfig.dnsNames = @($caTlsNames | Select-Object -Unique)
     -IpAddresses $effectiveAllowedIpAddresses `
     -DefaultDuration $DefaultCertificateDuration -MaximumDuration $MaximumCertificateDuration)
 Write-JsonFile -Path $caConfigPath -Value $caConfig
+$defaultsPath = Join-Path $DataRoot 'config\defaults.json'
+if (Test-Path -LiteralPath $defaultsPath) {
+    $defaults = Get-Content -LiteralPath $defaultsPath -Raw | ConvertFrom-Json
+    $defaults.root = $rootCertificatePath
+    $defaults.'ca-url' = $caUrl
+    Write-JsonFile -Path $defaultsPath -Value $defaults
+}
 
 $xml = @"
 <service>
