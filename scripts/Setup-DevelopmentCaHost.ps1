@@ -186,6 +186,48 @@ function Set-CaIssuancePolicy {
     return ($before -cne $after)
 }
 
+function Test-ExistingCaIssuancePolicy {
+    param(
+        [Parameter(Mandatory)][string] $StepExe,
+        [Parameter(Mandatory)][string] $CaPasswordFile,
+        [Parameter(Mandatory)][string] $CaUrl,
+        [Parameter(Mandatory)][string] $RootCertificate,
+        [Parameter(Mandatory)][string] $MaximumDuration
+    )
+    $provisionerPasswordPath = Join-Path $env:TEMP ("step-test-provisioner-pass-{0}.txt" -f [guid]::NewGuid())
+    $allowedCertificatePath = Join-Path $env:TEMP ("step-ca-allowed-{0}.crt" -f [guid]::NewGuid())
+    $allowedKeyPath = Join-Path $env:TEMP ("step-ca-allowed-{0}.key" -f [guid]::NewGuid())
+    $unauthorizedCertificatePath = Join-Path $env:TEMP ("step-ca-denied-{0}.crt" -f [guid]::NewGuid())
+    $unauthorizedKeyPath = Join-Path $env:TEMP ("step-ca-denied-{0}.key" -f [guid]::NewGuid())
+    $longLivedCertificatePath = Join-Path $env:TEMP ("step-ca-duration-denied-{0}.crt" -f [guid]::NewGuid())
+    $longLivedKeyPath = Join-Path $env:TEMP ("step-ca-duration-denied-{0}.key" -f [guid]::NewGuid())
+    $provisionerPassword = Read-Host 'Re-enter the dev-admin passphrase to verify the existing CA policy' -AsSecureString
+    $provisionerPasswordText = Convert-SecureStringToPlainText -Value $provisionerPassword
+    $provisionerPassword = $null
+    try {
+        Write-PasswordFile -Path $provisionerPasswordPath -Password $provisionerPasswordText
+        $provisionerPasswordText = $null
+        Set-AdminOnlyFileAcl -Path $provisionerPasswordPath
+        $commonArgs = @('--provisioner', 'dev-admin', '--provisioner-password-file', $provisionerPasswordPath,
+            '--password-file', $CaPasswordFile, '--ca-url', $CaUrl, '--root', $RootCertificate)
+        & $StepExe ca certificate existing-policy-allowed $allowedCertificatePath $allowedKeyPath @commonArgs --san localhost --not-after=5m
+        if ($LASTEXITCODE -ne 0) { throw 'The existing CA did not issue the allowed localhost test certificate.' }
+
+        & $StepExe ca certificate existing-policy-denied $unauthorizedCertificatePath $unauthorizedKeyPath @commonArgs --san unauthorized.invalid --not-after=5m 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized.invalid.' }
+
+        & $StepExe ca certificate existing-duration-denied $longLivedCertificatePath $longLivedKeyPath @commonArgs --san localhost "--not-after=$($MaximumDuration)1h" 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { throw 'Duration policy test failed: existing CA issued a certificate beyond the configured maximum.' }
+        Write-Host 'Existing CA allowed the approved name and denied the unlisted name and excessive lifetime.'
+    }
+    finally {
+        $provisionerPasswordText = $null
+        Remove-Item -LiteralPath $provisionerPasswordPath, $allowedCertificatePath, $allowedKeyPath, `
+            $unauthorizedCertificatePath, $unauthorizedKeyPath, $longLivedCertificatePath, $longLivedKeyPath `
+            -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Copy-DirectoryContents {
     param(
         [Parameter(Mandatory)][string] $Source,
@@ -328,6 +370,10 @@ if ($existingService) {
     }
     & $stepExe ca health --ca-url "https://localhost:$Port" --root $rootCertificatePath
     if ($LASTEXITCODE -ne 0) { throw "Existing CA health check failed. Check $logsPath." }
+
+    Test-ExistingCaIssuancePolicy -StepExe $stepExe -CaPasswordFile $passwordFilePath `
+        -CaUrl "https://localhost:$Port" -RootCertificate $rootCertificatePath `
+        -MaximumDuration $MaximumCertificateDuration
 
     Write-Host 'Existing CA setup is healthy; issuance policy configuration is applied.'
     exit 0
