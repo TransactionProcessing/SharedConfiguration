@@ -210,13 +210,13 @@ function Test-ExistingCaIssuancePolicy {
         Set-AdminOnlyFileAcl -Path $provisionerPasswordPath
         $commonArgs = @('--provisioner', 'dev-admin', '--provisioner-password-file', $provisionerPasswordPath,
             '--password-file', $CaPasswordFile, '--ca-url', $CaUrl, '--root', $RootCertificate)
-        & $StepExe ca certificate existing-policy-allowed $allowedCertificatePath $allowedKeyPath @commonArgs --san localhost --not-after=5m
+        & $StepExe ca certificate localhost $allowedCertificatePath $allowedKeyPath @commonArgs --san localhost --not-after=5m
         if ($LASTEXITCODE -ne 0) { throw 'The existing CA did not issue the allowed localhost test certificate.' }
 
-        & $StepExe ca certificate existing-policy-denied $unauthorizedCertificatePath $unauthorizedKeyPath @commonArgs --san unauthorized.invalid --not-after=5m 2>&1 | Out-Null
+        & $StepExe ca certificate unauthorized.invalid $unauthorizedCertificatePath $unauthorizedKeyPath @commonArgs --san unauthorized.invalid --not-after=5m 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) { throw 'Issuance policy test failed: existing CA issued a certificate for unauthorized.invalid.' }
 
-        & $StepExe ca certificate existing-duration-denied $longLivedCertificatePath $longLivedKeyPath @commonArgs --san localhost "--not-after=$($MaximumDuration)1h" 2>&1 | Out-Null
+        & $StepExe ca certificate localhost $longLivedCertificatePath $longLivedKeyPath @commonArgs --san localhost "--not-after=$($MaximumDuration)1h" 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) { throw 'Duration policy test failed: existing CA issued a certificate beyond the configured maximum.' }
         Write-Host 'Existing CA allowed the approved name and denied the unlisted name and excessive lifetime.'
     }
@@ -660,7 +660,7 @@ $testKeyPath = Join-Path $env:TEMP ("step-ca-test-{0}.key" -f [guid]::NewGuid())
 $testBundlePath = Join-Path $env:TEMP ("step-ca-test-{0}-chain.crt" -f [guid]::NewGuid())
 try {
     $issueArgs = @(
-        'ca', 'certificate', 'https-setup-check', $testCertificatePath, $testKeyPath,
+        'ca', 'certificate', 'localhost', $testCertificatePath, $testKeyPath,
         '--provisioner', 'dev-admin',
         '--provisioner-password-file', $testProvisionerPasswordFile,
         '--password-file', $passwordFilePath,
@@ -683,7 +683,7 @@ try {
     $unauthorizedCertificatePath = Join-Path $env:TEMP ("step-ca-denied-{0}.crt" -f [guid]::NewGuid())
     $unauthorizedKeyPath = Join-Path $env:TEMP ("step-ca-denied-{0}.key" -f [guid]::NewGuid())
     $unauthorizedArgs = @(
-        'ca', 'certificate', 'https-setup-denied-check', $unauthorizedCertificatePath, $unauthorizedKeyPath,
+        'ca', 'certificate', 'unauthorized.invalid', $unauthorizedCertificatePath, $unauthorizedKeyPath,
         '--provisioner', 'dev-admin',
         '--provisioner-password-file', $testProvisionerPasswordFile,
         '--password-file', $passwordFilePath,
@@ -701,7 +701,7 @@ try {
     $longLivedCertificatePath = Join-Path $env:TEMP ("step-ca-duration-denied-{0}.crt" -f [guid]::NewGuid())
     $longLivedKeyPath = Join-Path $env:TEMP ("step-ca-duration-denied-{0}.key" -f [guid]::NewGuid())
     $longDurationArgs = @(
-        'ca', 'certificate', 'https-setup-duration-check', $longLivedCertificatePath, $longLivedKeyPath,
+        'ca', 'certificate', 'localhost', $longLivedCertificatePath, $longLivedKeyPath,
         '--provisioner', 'dev-admin',
         '--provisioner-password-file', $testProvisionerPasswordFile,
         '--password-file', $passwordFilePath,
