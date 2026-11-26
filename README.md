@@ -44,6 +44,8 @@ Service crash recovery testing and a state-preserving uninstall/rollback procedu
 
 The CA's HTTPS listener, DNS issuance allow-list, ACME provisioner, certificate lifetimes, and network exposure caveat are documented in [Development CA issuance policy](docs/DevelopmentCa-Issuance-Policy.md).
 
+Reusable client trust installation, HTTPS validation, Docker image trust, and server certificate issuance scripts are documented in [Development CA client setup](docs/DevelopmentCa-Client-Setup.md).
+
 Run `scripts/Test-DevelopmentCa.ps1` on the development server before upgrading an application service. Copy the public `root_ca.crt` and `intermediate_ca.crt` from `C:\ProgramData\Smallstep\DevelopmentCA\certs` on the CA host to the development server, then run:
 
 ```powershell
