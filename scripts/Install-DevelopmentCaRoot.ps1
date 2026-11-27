@@ -97,11 +97,11 @@ try {
 }
 finally {
     if ($null -eq $previousStepPath) {
-        Remove-Item Env:STEPPATH -ErrorAction SilentlyContinue
+        Remove-Item Env:STEPPATH -ErrorAction SilentlyContinue -WhatIf:$false
     }
     else {
         $env:STEPPATH = $previousStepPath
     }
-    Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $temporaryDirectory -Recurse -Force -ErrorAction SilentlyContinue -WhatIf:$false
 }
 
