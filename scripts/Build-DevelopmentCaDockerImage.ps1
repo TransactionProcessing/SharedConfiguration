@@ -21,6 +21,12 @@ $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]:
 $sha256 = [System.Security.Cryptography.SHA256]::Create()
 try {
     $actualFingerprint = ([BitConverter]::ToString($sha256.ComputeHash($certificate.RawData))).Replace('-', '')
+    $basicConstraints = $certificate.Extensions |
+        Where-Object { $_ -is [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension] } |
+        Select-Object -First 1
+    if (-not $basicConstraints -or -not $basicConstraints.CertificateAuthority) {
+        throw 'The supplied certificate is not marked as a CA certificate.'
+    }
 }
 finally {
     $sha256.Dispose()
@@ -34,8 +40,9 @@ if ($actualFingerprint -ine $expected) {
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $dockerArgs = @(
     'build', '--secret', "id=development-ca-root,src=$((Resolve-Path -LiteralPath $RootCertificatePath).Path)",
+    '--build-arg', "DEVELOPMENT_CA_ROOT_FINGERPRINT=$actualFingerprint",
     '--file', (Join-Path $repoRoot 'Dockerfile'), '--tag', $ImageName, $repoRoot
 )
-Write-Host "Building $ImageName with the fingerprint-verified public CA root as a BuildKit secret."
+Write-Host "Building $ImageName with fingerprint-verified public root $actualFingerprint."
 & docker @dockerArgs
 if ($LASTEXITCODE -ne 0) { throw "Docker build failed with exit code $LASTEXITCODE." }
