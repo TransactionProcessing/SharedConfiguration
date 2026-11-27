@@ -4,24 +4,25 @@ These scripts configure trust and request leaf certificates on client machines. 
 
 ## Values to collect from the CA host
 
-Copy these public files from `C:\ProgramData\Smallstep\DevelopmentCA\certs`:
+Copy the public intermediate certificate from `C:\ProgramData\Smallstep\DevelopmentCA\certs`:
 
-- `root_ca.crt`
 - `intermediate_ca.crt`
 
-Obtain the root fingerprint independently from the CA setup record or by running `step certificate fingerprint root_ca.crt` on the CA host. Pass that recorded value to every install/bootstrap script. Do not compute the expected value from the same untrusted copy on the client.
+Obtain the root fingerprint independently from the CA setup record or by running `step certificate fingerprint root_ca.crt` on the CA host. Pass that recorded value to every install/bootstrap script. Do not compute the expected value from the same untrusted copy on the client. The Windows trust installer downloads the public root from the CA over HTTPS and Smallstep bootstrap verifies it against this fingerprint before installation.
 
 The default CA endpoint in the examples is `192.168.1.175:8000`. Replace it if the CA address changes. The approved server IP SANs currently configured on the CA are development `192.168.1.86` and staging `192.168.1.163`.
 
 ## Windows trust and HTTPS check — issue #60
 
-Run PowerShell as Administrator to add the verified public root to the machine-wide Windows root store. The script checks the SHA-256 fingerprint before changing the store and is safe to repeat:
+Run PowerShell as Administrator to download the public root and add it to the machine-wide Windows root store. The script requires the CA HTTPS URL and independently recorded SHA-256 fingerprint. Smallstep bootstrap validates the downloaded root against the fingerprint before the script installs it, and the script is safe to repeat:
 
 ```powershell
 .\scripts\Install-DevelopmentCaRoot.ps1 `
-  -RootCertificatePath 'C:\temp\root_ca.crt' `
+  -CaUrl 'https://192.168.1.175:8000' `
   -ExpectedSha256Fingerprint '<recorded-root-fingerprint>'
 ```
+
+The Step CLI must be available as `step.exe` on `PATH`. To use a specific installed copy, pass `-StepExePath 'C:\tools\step.exe'`. The script uses a temporary Step CLI home and removes the downloaded root after installation.
 
 Check a real service endpoint using the normal operating-system trust behavior. The script does not bypass certificate validation:
 
@@ -33,7 +34,7 @@ Use the actual HTTPS port/path for the service. A service must present a leaf ce
 
 ## Linux and WSL trust — issue #61
 
-On Ubuntu/Debian (including WSL distributions), install the verified public root:
+On Ubuntu/Debian (including WSL distributions), copy the public root certificate from the CA host and install the verified copy:
 
 ```bash
 sudo ./scripts/Install-DevelopmentCaRoot.sh ./root_ca.crt '<recorded-root-fingerprint>'
@@ -88,3 +89,4 @@ For staging, repeat the same script on the staging server with `-ServerIpAddress
 ## Scope and follow-up
 
 These scripts establish OS trust, build a trusted development base image, test HTTPS validation, and issue a service leaf certificate. They do not change a service's Kestrel/application configuration, deploy the PFX/key to a service account, or configure automatic renewal/reload. Those changes belong in each service repository and must be completed before the service itself is considered HTTPS-enabled. The service certificates use the CA's current 24-hour default lifetime, so certificate renewal and deployment automation must be planned before relying on them beyond testing.
+
